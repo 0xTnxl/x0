@@ -1,0 +1,56 @@
+[workspace]
+members = [
+    "programs/x0-guard",
+    "programs/x0-token",
+    "programs/x0-registry",
+    "programs/x0-escrow",
+    "programs/x0-reputation",
+    "programs/x0-common",
+    "programs/x0-wrapper"
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/0xtnxl/x0"
+homepage = "https://x0protocol.dev"
+authors = ["x0 Protocol Core Team <team@x0protocol.dev>"]
+
+[workspace.dependencies]
+# Anchor framework
+anchor-lang = "0.30.1"
+anchor-spl = "0.30.1"
+
+# Solana SDK (pinned versions compatible with Anchor 0.30.1)
+solana-program = "=1.18.22"
+spl-token-2022 = { version = "=3.0.4", features = ["no-entrypoint", "zk-ops"] }
+spl-transfer-hook-interface = "=0.6.5"
+spl-tlv-account-resolution = "=0.6.5"
+
+# Cryptography
+sha2 = "0.10"
+bytemuck = { version = "1.14", features = ["derive"] }
+
+# Fix for constant_time_eq edition 2024 issue (blake3 1.6.x uses 0.3.x)
+blake3 = "=1.5.5"
+constant_time_eq = "=0.3.1"
+
+# Serialization
+borsh = "0.10"
+
+# Testing
+solana-program-test = "=1.18.22"
+solana-sdk = "=1.18.22"
+tokio = { version = "1.35", features = ["full"] }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+overflow-checks = true
+
+[profile.release.build-override]
+opt-level = 3
+incremental = false
+codegen-units = 1

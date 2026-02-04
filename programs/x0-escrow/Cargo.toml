@@ -1,0 +1,32 @@
+[package]
+name = "x0-escrow"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "x0-01 Escrow Program - Conditional payments with dispute resolution"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "x0_escrow"
+
+[features]
+default = []
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+anchor-lang = { workspace = true }
+anchor-spl = { workspace = true }
+solana-program = { workspace = true }
+spl-token-2022 = { workspace = true }
+x0-common = { path = "../x0-common" }
+x0-reputation = { path = "../x0-reputation", features = ["cpi"] }
+
+[dev-dependencies]
+solana-program-test = { workspace = true }
+solana-sdk = { workspace = true }
+tokio = { workspace = true }

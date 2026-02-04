@@ -1,0 +1,31 @@
+[package]
+name = "x0-wrapper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "x0-USD Wrapper Token - 1:1 USDC-backed Token-2022 token with redemption fee"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "x0_wrapper"
+
+[features]
+default = []
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+anchor-lang = { workspace = true }
+anchor-spl = { workspace = true }
+solana-program = { workspace = true }
+spl-token-2022 = { workspace = true }
+x0-common = { path = "../x0-common" }
+
+[dev-dependencies]
+solana-program-test = { workspace = true }
+solana-sdk = { workspace = true }
+tokio = { workspace = true }

@@ -1,0 +1,60 @@
+[toolchain]
+anchor_version = "0.30.1"
+
+[features]
+resolution = true
+skip-lint = false
+skip-idl = true
+
+[programs.localnet]
+x0_guard = "2uYGW3fQUGfhrwVbkupdasXBpRPfGYBGTLUdaPTXU9vP"
+x0_token = "EHHTCSyGkmnsBhGsvCmLzKgcSxtsN31ScrfiwcCbjHci"
+x0_registry = "Bebty49EPhFoANKDw7TqLQ2bX61ackNav5iNkj36eVJo"
+x0_escrow = "AhaDyVm8LBxpUwFdArA37LnHvNx6cNWe3KAiy8zGqhHF"
+x0_reputation = "FfzkTWRGAJQPDePbujZdEhKHqC1UpqvDrpv4TEiWpx6y"
+x0_wrapper = "EomiXBbg94Smu4ipDoJtuguazcd1KjLFDFJt2fCabvJ8"
+
+[programs.devnet]
+x0_guard = "2uYGW3fQUGfhrwVbkupdasXBpRPfGYBGTLUdaPTXU9vP"
+x0_token = "EHHTCSyGkmnsBhGsvCmLzKgcSxtsN31ScrfiwcCbjHci"
+x0_registry = "Bebty49EPhFoANKDw7TqLQ2bX61ackNav5iNkj36eVJo"
+x0_escrow = "AhaDyVm8LBxpUwFdArA37LnHvNx6cNWe3KAiy8zGqhHF"
+x0_reputation = "FfzkTWRGAJQPDePbujZdEhKHqC1UpqvDrpv4TEiWpx6y"
+x0_wrapper = "EomiXBbg94Smu4ipDoJtuguazcd1KjLFDFJt2fCabvJ8"
+
+[programs.mainnet]
+x0_guard = "2uYGW3fQUGfhrwVbkupdasXBpRPfGYBGTLUdaPTXU9vP"
+x0_token = "EHHTCSyGkmnsBhGsvCmLzKgcSxtsN31ScrfiwcCbjHci"
+x0_registry = "Bebty49EPhFoANKDw7TqLQ2bX61ackNav5iNkj36eVJo"
+x0_escrow = "AhaDyVm8LBxpUwFdArA37LnHvNx6cNWe3KAiy8zGqhHF"
+x0_reputation = "FfzkTWRGAJQPDePbujZdEhKHqC1UpqvDrpv4TEiWpx6y"
+x0_wrapper = "EomiXBbg94Smu4ipDoJtuguazcd1KjLFDFJt2fCabvJ8"
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "Localnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+build = "anchor build"
+deploy = "anchor deploy"
+
+[workspace]
+members = [
+    "programs/*"
+]
+
+[test]
+startup_wait = 5000
+
+[test.validator]
+url = "https://api.mainnet-beta.solana.com"
+
+[[test.validator.clone]]
+address = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"  # Token-2022 Program
+
+[[test.validator.clone]]
+address = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"  # Token Program

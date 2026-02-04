@@ -1,0 +1,34 @@
+[package]
+name = "x0-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Common types, error codes, and utilities for x0-01 protocol"
+
+[lib]
+crate-type = ["lib"]
+name = "x0_common"
+
+[features]
+default = []
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+anchor-lang = { workspace = true }
+anchor-spl = { workspace = true }
+solana-program = { workspace = true }
+sha2 = { workspace = true }
+bytemuck = { workspace = true }
+borsh = { workspace = true }
+blake3 = { workspace = true }
+constant_time_eq = { workspace = true }
+
+[dev-dependencies]
+solana-program-test = { workspace = true }
+solana-sdk = { workspace = true }
+tokio = { workspace = true }
