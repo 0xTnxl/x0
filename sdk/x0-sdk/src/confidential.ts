@@ -307,11 +307,17 @@ export function decryptBalance(ciphertext: Uint8Array, aeKey: Uint8Array): bigin
  */
 
 /**
+ * @experimental PLACEHOLDER - Returns synthetic proof data, not real ZK proofs.
+ *
+ * TODO(production): Integrate with solana-zk-token-sdk or equivalent Groth16
+ * proving system. The proof must demonstrate knowledge of the ElGamal secret key
+ * corresponding to the public key, using the Ristretto curve.
+ *
  * Generates a pubkey validity proof for account configuration.
- * 
+ *
  * This proves that the provided ElGamal public key is a valid point
  * on the curve and the prover knows the corresponding secret key.
- * 
+ *
  * @param _elgamalSecretKey - The ElGamal secret key
  * @param elgamalPubkey - The ElGamal public key
  * @returns Proof data
@@ -331,8 +337,13 @@ export async function generatePubkeyValidityProof(
 }
 
 /**
+ * @experimental PLACEHOLDER - Returns synthetic proof data, not real ZK proofs.
+ *
+ * TODO(production): Integrate with solana-zk-token-sdk for Groth16 range proofs
+ * that verify the withdrawal amount does not exceed the encrypted balance.
+ *
  * Generates a withdrawal proof.
- * 
+ *
  * Proves that:
  * 1. The withdrawal amount is less than or equal to the available balance
  * 2. The new encrypted balance is correctly computed
@@ -376,8 +387,13 @@ export async function generateWithdrawProof(
 }
 
 /**
+ * @experimental PLACEHOLDER - Returns synthetic proof data, not real ZK proofs.
+ *
+ * TODO(production): Integrate with solana-zk-token-sdk for zero-balance
+ * Groth16 proofs required before closing confidential accounts.
+ *
  * Generates a zero balance proof.
- * 
+ *
  * Proves that the encrypted available balance is exactly zero.
  * Required before closing a confidential account.
  * 
@@ -400,6 +416,11 @@ export async function generateZeroBalanceProof(
 // Confidential Client
 // ============================================================================
 
+/**
+ * @experimental This client uses placeholder ZK proofs and is NOT suitable
+ * for production use. Real Groth16 proof generation must be integrated
+ * before mainnet deployment.
+ */
 export class ConfidentialClient {
   constructor(
     private connection: Connection,
@@ -408,7 +429,11 @@ export class ConfidentialClient {
       signTransaction: (tx: Transaction) => Promise<Transaction>;
     },
     private confirmOptions: ConfirmOptions = { commitment: "confirmed" }
-  ) {}
+  ) {
+    console.warn(
+      "[x0-sdk] ConfidentialClient uses placeholder ZK proofs. Do NOT use in production."
+    );
+  }
 
   // ==========================================================================
   // Account Configuration
@@ -488,7 +513,7 @@ export class ConfidentialClient {
     tokenAccount: PublicKey,
     mint: PublicKey,
     decryptableZeroBalance: Uint8Array,
-    _maxPendingCredits: number,
+    maxPendingCredits: number,
     proofContextState: PublicKey | null
   ): Promise<TransactionInstruction> {
     // Token-2022 ConfidentialTransfer::ConfigureAccount instruction format:
@@ -513,8 +538,8 @@ export class ConfidentialClient {
     Buffer.from(decryptableZeroBalance).copy(data, offset);
     offset += 36;
     
-    // Maximum pending balance credit counter (set to max u64 for unlimited)
-    data.writeBigUInt64LE(BigInt("18446744073709551615"), offset);
+    // Maximum pending balance credit counter (matches protocol constant)
+    data.writeBigUInt64LE(BigInt(maxPendingCredits), offset);
     offset += 8;
     
     // Proof instruction offset (-1 means no proof introspection, auto-approve)

@@ -282,9 +282,10 @@ mod tests {
         // Edge case: 0
         assert_eq!(calculate_protocol_fee(0), 0);
         
-        // Small amount (less than 125 won't have visible fee due to integer division)
-        assert_eq!(calculate_protocol_fee(100), 0);
-        assert_eq!(calculate_protocol_fee(125), 1);
+        // Small amounts: MIN_PROTOCOL_FEE (1) enforced when calculated fee rounds to 0 (HIGH-2)
+        assert_eq!(calculate_protocol_fee(1), 1);    // MIN_PROTOCOL_FEE applies
+        assert_eq!(calculate_protocol_fee(100), 1);  // 0.8% of 100 = 0, MIN_PROTOCOL_FEE applies
+        assert_eq!(calculate_protocol_fee(125), 1);  // 125 * 80 / 10000 = 1 (exact threshold)
     }
 
     #[test]
@@ -312,8 +313,11 @@ mod tests {
         // 30 seconds in future is valid (clock skew)
         assert!(is_valid_timestamp(now + 30, now));
         
-        // 2 minutes in future is invalid
-        assert!(!is_valid_timestamp(now + 120, now));
+        // 2 minutes in future is valid (LOW-5: MAX_CLOCK_SKEW_SECONDS = 300s)
+        assert!(is_valid_timestamp(now + 120, now));
+
+        // 6 minutes in future is invalid (exceeds 300s skew window)
+        assert!(!is_valid_timestamp(now + 360, now));
     }
 
     #[test]

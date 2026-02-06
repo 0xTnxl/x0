@@ -10,6 +10,7 @@ use spl_transfer_hook_interface::instruction::ExecuteInstruction;
 
 use x0_common::constants::*;
 use x0_common::error::X0GuardError;
+use spl_token_2022::extension::StateWithExtensions;
 
 // Import spl_token_2022 ID for ownership validation (HIGH-7)
 
@@ -19,6 +20,9 @@ pub struct InitializeExtraAccountMetas<'info> {
     /// The payer for account creation
     #[account(mut)]
     pub payer: Signer<'info>,
+
+    /// The mint authority (MEDIUM-10: must match Token-2022 mint authority)
+    pub mint_authority: Signer<'info>,
 
     /// The mint for which to initialize extra metas
     /// CHECK: Validated that it's owned by Token-2022 program (HIGH-7)
@@ -49,6 +53,25 @@ pub fn handler(ctx: Context<InitializeExtraAccountMetas>) -> Result<()> {
             extra_metas_data.iter().all(|&b| b == 0) || extra_metas_data.is_empty(),
             X0GuardError::ExtraMetasAlreadyInitialized
         );
+    }
+
+    // MEDIUM-10 FIX: Verify the signer is the mint authority
+    {
+        let mint_data = ctx.accounts.mint.try_borrow_data()?;
+        let mint_state = StateWithExtensions::<spl_token_2022::state::Mint>::unpack(&mint_data)
+            .map_err(|_| ProgramError::InvalidAccountData)?;
+
+        match mint_state.base.mint_authority {
+            spl_token_2022::solana_program::program_option::COption::Some(authority) => {
+                require!(
+                    ctx.accounts.mint_authority.key() == authority,
+                    X0GuardError::UnauthorizedExtraMetasInitializer
+                );
+            }
+            spl_token_2022::solana_program::program_option::COption::None => {
+                return Err(ProgramError::InvalidAccountData.into());
+            }
+        }
     }
 
     // Define the extra accounts needed for transfer validation

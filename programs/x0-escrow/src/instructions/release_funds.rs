@@ -75,7 +75,6 @@ pub fn handler(ctx: Context<ReleaseFunds>) -> Result<()> {
     
     // Update state BEFORE transfer (prevents reentrancy)
     escrow.state = EscrowState::Released;
-    escrow.state = EscrowState::Released;
 
     // Transfer tokens to seller using escrow PDA authority
     let seeds = &[

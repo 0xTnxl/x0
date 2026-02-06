@@ -198,6 +198,10 @@ pub enum X0GuardError {
     /// MEDIUM-10: Extra account metas already initialized
     #[msg("Extra account metas already initialized")]
     ExtraMetasAlreadyInitialized, // 0x1143
+
+    /// MEDIUM-10: Caller is not the mint authority
+    #[msg("Only the mint authority can initialize extra account metas")]
+    UnauthorizedExtraMetasInitializer, // 0x1144
 }
 
 /// Error codes for x0_escrow program

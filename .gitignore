@@ -36,3 +36,5 @@ deploy/
 # Test
 coverage/
 .nyc_output/
+/website/
+
