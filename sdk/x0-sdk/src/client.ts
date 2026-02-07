@@ -577,7 +577,8 @@ export class X0Client {
     }
 
     // Add transfer instruction
-    // Note: In production, this would go through x0-guard transfer hook validation
+    // Note: If the mint has x0-guard transfer hook enabled, validation
+    // will automatically occur via Token-2022's transfer hook interface
     instructions.push(
       createTransferCheckedInstruction(
         senderAta,

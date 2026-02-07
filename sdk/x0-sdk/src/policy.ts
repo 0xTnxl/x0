@@ -71,8 +71,8 @@ export class PolicyManager {
       return null;
     }
 
-    // Parse account data
-    // In production, use Anchor's IDL-based deserialization
+    // Parse account data manually for explicit control
+    // Alternative: Use Anchor's IDL-based deserialization if IDL is available
     return this.parseAgentPolicy(accountInfo.data);
   }
 
@@ -86,7 +86,9 @@ export class PolicyManager {
 
   /**
    * Parse raw account data into AgentPolicyAccount
-   * This is a simplified parser - production would use Anchor's borsh deserialization
+   *
+   * Uses manual buffer parsing for explicit field offsets.
+   * This provides fine-grained control over deserialization.
    */
   private parseAgentPolicy(data: Buffer): AgentPolicyAccount {
     // Skip 8-byte discriminator

@@ -6,11 +6,14 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "wasm"
   ],
   "scripts": {
-    "build": "tsc",
-    "clean": "rm -rf dist",
+    "build": "npm run build:wasm && tsc",
+    "build:ts": "tsc",
+    "build:wasm": "bash scripts/build-wasm.sh",
+    "clean": "rm -rf dist wasm",
     "test": "mocha --require ts-node/register 'tests/**/*.test.ts'",
     "prepublishOnly": "npm run build"
   },

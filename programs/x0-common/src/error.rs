@@ -620,6 +620,74 @@ pub enum X0WrapperError {
     InvalidActionType, // 0x1645
 }
 
+/// Error codes for x0_zk_verifier program
+#[error_code]
+pub enum X0ZkVerifierError {
+    // ========================================================================
+    // Proof Verification Errors (0x1700-0x170F)
+    // ========================================================================
+
+    /// Groth16 proof verification failed
+    #[msg("Zero-knowledge proof verification failed")]
+    ProofVerificationFailed, // 0x1700
+
+    /// Invalid proof data format
+    #[msg("Invalid proof data format")]
+    InvalidProofData, // 0x1701
+
+    /// Proof context already exists
+    #[msg("Proof context already exists")]
+    ProofContextExists, // 0x1702
+
+    /// Invalid proof type
+    #[msg("Invalid proof type")]
+    InvalidProofType, // 0x1703
+
+    /// Proof has expired (timestamp too old)
+    #[msg("Proof has expired")]
+    ProofExpired, // 0x1704
+
+    // ========================================================================
+    // Parameter Validation Errors (0x1710-0x171F)
+    // ========================================================================
+
+    /// Amount exceeds maximum for confidential transfers
+    #[msg("Amount exceeds maximum (2^48 - 1)")]
+    AmountTooLarge, // 0x1710
+
+    /// Invalid ElGamal public key
+    #[msg("Invalid ElGamal public key")]
+    InvalidElGamalPubkey, // 0x1711
+
+    /// Invalid ciphertext format
+    #[msg("Invalid ciphertext format")]
+    InvalidCiphertext, // 0x1712
+
+    /// Proof data size mismatch
+    #[msg("Proof data size does not match expected size")]
+    ProofSizeMismatch, // 0x1713
+
+    /// Recipient mismatch
+    #[msg("Recipient does not match proof context")]
+    RecipientMismatch, // 0x1714
+
+    /// Amount mismatch
+    #[msg("Amount does not match proof context")]
+    AmountMismatch, // 0x1715
+
+    // ========================================================================
+    // Math Errors (0x1720-0x172F)
+    // ========================================================================
+
+    /// Arithmetic overflow
+    #[msg("Arithmetic overflow in calculation")]
+    ArithmeticOverflow, // 0x1720
+
+    /// Arithmetic underflow
+    #[msg("Arithmetic underflow in calculation")]
+    ArithmeticUnderflow, // 0x1721
+}
+
 /// Unified error type for cross-program invocations
 #[derive(Clone, Debug)]
 pub enum X0Error {

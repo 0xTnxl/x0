@@ -16,7 +16,7 @@ import {
   MAX_CAPABILITIES,
   MAX_METADATA_SIZE,
 } from "./constants";
-import { deriveRegistryPda } from "./utils";
+import { deriveRegistryPda, deriveReputationPda } from "./utils";
 import type {
   AgentRegistryEntry,
   Capability,
@@ -129,7 +129,7 @@ export class RegistryManager {
       owner,
       endpoint,
       capabilities,
-      reputationPda: agentId, // placeholder - in production derive from agentId
+      reputationPda: deriveReputationPda(agentId)[0],
       lastUpdated: lastActiveAt,
       isActive,
     };

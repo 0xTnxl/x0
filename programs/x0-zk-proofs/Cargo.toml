@@ -1,0 +1,35 @@
+[package]
+name = "x0-zk-proofs"
+version = "0.1.0"
+edition = "2021"
+authors = ["x0 Protocol <dev@x0protocol.dev>"]
+description = "WASM-compiled Groth16 zero-knowledge proof generation for x0 SDK"
+repository = "https://github.com/x0-protocol/x0-01"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# WASM bindings
+wasm-bindgen = "0.2.92"
+js-sys = "0.3"
+
+# Solana ZK Token SDK for Groth16 proof generation
+solana-zk-token-sdk = "=1.18.22"
+
+# POD type serialization
+bytemuck = { version = "1.14", features = ["derive"] }
+
+# Random number generation (WASM-compatible)
+getrandom = { version = "0.2", features = ["js"] }
+
+# Error handling
+thiserror = "1.0"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+# Disable wasm-pack's automatic wasm-opt so we can run it manually with correct flags
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

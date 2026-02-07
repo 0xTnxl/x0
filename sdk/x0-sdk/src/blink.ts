@@ -343,9 +343,9 @@ export function buildBlinkApprovalTransaction(params: {
     recentBlockhash: params.recentBlockhash,
   });
 
-  // Add a memo instruction with Blink ID for tracking
-  // In production, import @solana/spl-memo
-  // For now, we just add the provided instructions
+  // Add provided instructions to transaction
+  // Note: Memo instructions can be optionally added by callers
+  // for additional tracking via @solana/spl-memo
   tx.add(...params.instructions);
 
   return tx;

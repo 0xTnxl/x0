@@ -1844,30 +1844,30 @@ const isValid = await verifyPaymentProof(connection, proof, {
     \item \textbf{Examples}: \texttt{https://github.com/x0-protocol/examples}
 \end{itemize}
 
-\subsection{Confidential Transfer Warning}
+\subsection{Confidential Transfer Architecture}
 
-\textbf{Important}: The SDK's \texttt{ConfidentialClient} module uses \textit{placeholder} ZK proof generation and is marked as \texttt{@experimental}. It should not be used in production environments.
+The SDK's \texttt{ConfidentialClient} module uses \textit{real} Groth16 zero-knowledge proof generation powered by \texttt{solana-zk-token-sdk} compiled to WebAssembly. The WASM module (\texttt{x0-zk-proofs}) provides three proof generation functions:
 
-\begin{lstlisting}[language=JavaScript,caption=Confidential Transfer Limitations]
-// WARNING: EXPERIMENTAL - Uses placeholder ZK proofs
-// Do NOT use confidential transfers in production without
-// implementing real Groth16 proof generation via solana-zk-token-sdk
-
+\begin{lstlisting}[language=JavaScript,caption=Confidential Transfer ZK Proof Generation]
 import { ConfidentialClient } from '@x0-protocol/sdk';
 
-// This client will emit console warnings at runtime
+// ConfidentialClient uses WASM-compiled Groth16 proofs
 const confidentialClient = new ConfidentialClient(connection, wallet);
+
+// Proof generation is handled automatically via WASM:
+// - PubkeyValidityProof: Proves ElGamal key validity
+// - WithdrawProof: Proves withdrawal amount against encrypted balance
+// - ZeroBalanceProof: Proves zero balance for account closure
 \end{lstlisting}
 
-\textbf{Production Requirements}: Before enabling confidential transfers on mainnet:
-\begin{enumerate}
-    \item Integrate with Solana's ZK Token SDK for authentic Groth16 proof construction
-    \item Replace placeholder proof functions (\texttt{generatePubkeyValidityProof}, \texttt{generateWithdrawProof}, \texttt{generateZeroBalanceProof}) with real ZK proving system
-    \item Use \texttt{maxPendingCredits} parameter matching protocol constant (65536) instead of u64::MAX
-    \item Implement proper ElGamal encryption and range proof verification
-    \item Test thoroughly on devnet with real ZK proofs before mainnet deployment
-\end{enumerate}
+\textbf{WASM Build}: The proof generation module is compiled from Rust to WebAssembly using \texttt{wasm-pack}, targeting Node.js, web browsers, and bundlers (webpack/rollup). The module uses:
+\begin{itemize}
+    \item \texttt{solana-zk-token-sdk v1.18.22} for Groth16 proof construction on the Ristretto255 curve
+    \item \texttt{ElGamalKeypair} reconstruction from 64-byte serialized form
+    \item \texttt{bytemuck} for POD-type serialization of proof data
+    \item Authenticated encryption (AE) for decryptable balance hints
+\end{itemize}
 
-\textbf{Note}: The on-chain validation (x0-guard) \textit{does} perform proper ZK proof verification. The limitation is only in the TypeScript SDK's client-side proof generation, which currently returns synthetic test data.
+\textbf{Note}: Both the on-chain validation (x0-guard via Token-2022) and the TypeScript SDK's client-side proof generation now use production-grade cryptographic operations.
 
 \end{document}

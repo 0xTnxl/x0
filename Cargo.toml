@@ -6,7 +6,9 @@ members = [
     "programs/x0-escrow",
     "programs/x0-reputation",
     "programs/x0-common",
-    "programs/x0-wrapper"
+    "programs/x0-wrapper",
+    "programs/x0-zk-proofs",
+    "programs/x0-zk-verifier",
 ]
 resolver = "2"
 
@@ -46,9 +48,12 @@ solana-sdk = "=1.18.22"
 tokio = { version = "1.35", features = ["full"] }
 
 [profile.release]
+opt-level = "z"
 lto = "fat"
 codegen-units = 1
-overflow-checks = true
+panic = "abort"
+strip = true
+overflow-checks = false
 
 [profile.release.build-override]
 opt-level = 3

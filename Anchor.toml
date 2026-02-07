@@ -13,6 +13,7 @@ x0_registry = "Bebty49EPhFoANKDw7TqLQ2bX61ackNav5iNkj36eVJo"
 x0_escrow = "AhaDyVm8LBxpUwFdArA37LnHvNx6cNWe3KAiy8zGqhHF"
 x0_reputation = "FfzkTWRGAJQPDePbujZdEhKHqC1UpqvDrpv4TEiWpx6y"
 x0_wrapper = "EomiXBbg94Smu4ipDoJtuguazcd1KjLFDFJt2fCabvJ8"
+x0_zk_verifier = "zQWSrznKgcK8aHA4ry7xbSCdP36FqgUHj766YM3pwre"
 
 [programs.devnet]
 x0_guard = "2uYGW3fQUGfhrwVbkupdasXBpRPfGYBGTLUdaPTXU9vP"
@@ -21,6 +22,7 @@ x0_registry = "Bebty49EPhFoANKDw7TqLQ2bX61ackNav5iNkj36eVJo"
 x0_escrow = "AhaDyVm8LBxpUwFdArA37LnHvNx6cNWe3KAiy8zGqhHF"
 x0_reputation = "FfzkTWRGAJQPDePbujZdEhKHqC1UpqvDrpv4TEiWpx6y"
 x0_wrapper = "EomiXBbg94Smu4ipDoJtuguazcd1KjLFDFJt2fCabvJ8"
+x0_zk_verifier = "zQWSrznKgcK8aHA4ry7xbSCdP36FqgUHj766YM3pwre"
 
 [programs.mainnet]
 x0_guard = "2uYGW3fQUGfhrwVbkupdasXBpRPfGYBGTLUdaPTXU9vP"
@@ -29,6 +31,7 @@ x0_registry = "Bebty49EPhFoANKDw7TqLQ2bX61ackNav5iNkj36eVJo"
 x0_escrow = "AhaDyVm8LBxpUwFdArA37LnHvNx6cNWe3KAiy8zGqhHF"
 x0_reputation = "FfzkTWRGAJQPDePbujZdEhKHqC1UpqvDrpv4TEiWpx6y"
 x0_wrapper = "EomiXBbg94Smu4ipDoJtuguazcd1KjLFDFJt2fCabvJ8"
+x0_zk_verifier = "zQWSrznKgcK8aHA4ry7xbSCdP36FqgUHj766YM3pwre"
 
 [registry]
 url = "https://api.apr.dev"
