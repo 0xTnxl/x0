@@ -19,10 +19,9 @@ import { BN } from "@coral-xyz/anchor";
 import {
   X0_ESCROW_PROGRAM_ID,
   X0_REPUTATION_PROGRAM_ID,
-  AUTO_RELEASE_DELAY_SECONDS,
-  DELIVERY_TIMEOUT_SECONDS,
+  DEFAULT_ESCROW_TIMEOUT_SECONDS,
 } from "./constants";
-import { deriveEscrowPda, computeMemoHash, now } from "./utils";
+import { deriveEscrowPda, computeMemoHash, getInstructionDiscriminator, now } from "./utils";
 import type { EscrowAccount, EscrowState, CreateEscrowParams } from "./types";
 
 // ============================================================================
@@ -89,75 +88,94 @@ export class EscrowManager {
     // Skip 8-byte discriminator
     let offset = 8;
 
+    // On-chain layout: version, buyer, seller, arbiter (Option<Pubkey>),
+    // amount, memo_hash, state, timeout, created_at, delivery_proof (Option<[u8;32]>),
+    // dispute_evidence (Option<[u8;32]>), mint, token_decimals, dispute_initiated_slot, bump
+
+    const version = data[offset]!;
+    offset += 1;
+
     const buyer = new PublicKey(data.slice(offset, offset + 32));
     offset += 32;
 
     const seller = new PublicKey(data.slice(offset, offset + 32));
     offset += 32;
 
-    const memoHash = new Uint8Array(data.slice(offset, offset + 32));
-    offset += 32;
-
-    const amount = new BN(data.slice(offset, offset + 8), "le");
-    offset += 8;
-
-    const mint = new PublicKey(data.slice(offset, offset + 32));
-    offset += 32;
-
-    const createdAt = new BN(data.slice(offset, offset + 8), "le").toNumber();
-    offset += 8;
-
-    const deliveryTimeout = new BN(data.slice(offset, offset + 8), "le").toNumber();
-    offset += 8;
-
-    const autoReleaseDelay = new BN(data.slice(offset, offset + 8), "le").toNumber();
-    offset += 8;
-
-    const deliveredAt = data[offset] === 1
-      ? new BN(data.slice(offset + 1, offset + 9), "le").toNumber()
-      : null;
-    offset += 9;
-
-    const state = data[offset]! as EscrowState;
-    offset += 1;
-
-    // Arbiter (Option<Pubkey>)
-    const hasArbiter = data[offset] === 1;
+    // Option<Pubkey> arbiter
+    const hasArbiter = data[offset]! === 1;
     offset += 1;
     const arbiter = hasArbiter
       ? new PublicKey(data.slice(offset, offset + 32))
       : undefined;
-    offset += hasArbiter ? 32 : 0;
+    offset += 32; // Always advance 32 regardless (Anchor Option<Pubkey> is fixed-size)
 
-    // Dispute reason (Option<String>)
-    const hasDisputeReason = data[offset] === 1;
+    // amount: u64
+    const amount = new BN(data.slice(offset, offset + 8), "le");
+    offset += 8;
+
+    // memo_hash: [u8; 32]
+    const memoHash = new Uint8Array(data.slice(offset, offset + 32));
+    offset += 32;
+
+    // state: EscrowState (enum, 1 byte)
+    const state = data[offset]! as EscrowState;
     offset += 1;
-    let disputeReason: string | undefined;
-    if (hasDisputeReason) {
-      const reasonLen = data.readUInt32LE(offset);
-      offset += 4;
-      disputeReason = data.slice(offset, offset + reasonLen).toString("utf-8");
-      offset += reasonLen;
-    }
 
+    // timeout: i64
+    const timeout = new BN(data.slice(offset, offset + 8), "le").toNumber();
+    offset += 8;
+
+    // created_at: i64
+    const createdAt = new BN(data.slice(offset, offset + 8), "le").toNumber();
+    offset += 8;
+
+    // delivery_proof: Option<[u8; 32]>
+    const hasDeliveryProof = data[offset]! === 1;
+    offset += 1;
+    const deliveryProof = hasDeliveryProof
+      ? new Uint8Array(data.slice(offset, offset + 32))
+      : undefined;
+    offset += 32;
+
+    // dispute_evidence: Option<[u8; 32]>
+    const hasDisputeEvidence = data[offset]! === 1;
+    offset += 1;
+    const disputeEvidence = hasDisputeEvidence
+      ? new Uint8Array(data.slice(offset, offset + 32))
+      : undefined;
+    offset += 32;
+
+    // mint: Pubkey
+    const mint = new PublicKey(data.slice(offset, offset + 32));
+    offset += 32;
+
+    // token_decimals: u8
+    const tokenDecimals = data[offset]!;
+    offset += 1;
+
+    // dispute_initiated_slot: u64
+    const disputeInitiatedSlot = new BN(data.slice(offset, offset + 8), "le").toNumber();
+    offset += 8;
+
+    // bump: u8
     const bump = data[offset]!;
 
     return {
+      version,
       buyer,
       seller,
-      memoHash,
-      amount,
-      mint,
-      createdAt,
-      deliveryTimeout,
-      autoReleaseDelay,
-      deliveredAt,
-      state,
       ...(arbiter && { arbiter }),
-      ...(disputeReason && { disputeReason }),
+      amount,
+      memoHash,
+      state,
+      timeout,
+      createdAt,
+      ...(deliveryProof && { deliveryProof }),
+      ...(disputeEvidence && { disputeEvidence }),
+      mint,
+      tokenDecimals,
+      disputeInitiatedSlot,
       bump,
-      timeout: deliveryTimeout,
-      tokenDecimals: 6,
     };
   }
 
@@ -181,22 +199,16 @@ export class EscrowManager {
     );
 
     // Discriminator for create_escrow
-    const discriminator = Buffer.from([
-      0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f, 0x70, 0x81
-    ]);
+    const discriminator = getInstructionDiscriminator("create_escrow");
 
-    const deliveryTimeout = params.deliveryTimeout ?? DELIVERY_TIMEOUT_SECONDS;
-    const autoReleaseDelay = params.autoReleaseDelay ?? AUTO_RELEASE_DELAY_SECONDS;
+    const timeoutSeconds = params.timeoutSeconds ?? params.deliveryTimeout ?? DEFAULT_ESCROW_TIMEOUT_SECONDS;
 
-    const memoBytes = Buffer.from(serviceMemo, "utf-8");
-
+    // On-chain args: amount: u64, memo_hash: [u8; 32], timeout_seconds: i64, arbiter: Option<Pubkey>
     const data = Buffer.concat([
       discriminator,
       params.amount.toArrayLike(Buffer, "le", 8),
-      Buffer.from(new Uint32Array([memoBytes.length]).buffer),
-      memoBytes,
-      Buffer.from(new BN(deliveryTimeout).toArrayLike(Buffer, "le", 8)),
-      Buffer.from(new BN(autoReleaseDelay).toArrayLike(Buffer, "le", 8)),
+      Buffer.from(memoHash),
+      new BN(timeoutSeconds).toArrayLike(Buffer, "le", 8),
       params.arbiter ? Buffer.concat([Buffer.from([1]), params.arbiter.toBuffer()]) : Buffer.from([0]),
     ]);
 
@@ -245,9 +257,7 @@ export class EscrowManager {
       this.tokenProgramId
     );
 
-    const discriminator = Buffer.from([
-      0x2b, 0x3c, 0x4d, 0x5e, 0x6f, 0x70, 0x81, 0x92
-    ]);
+    const discriminator = getInstructionDiscriminator("fund_escrow");
 
     const data = Buffer.concat([
       discriminator,
@@ -277,9 +287,7 @@ export class EscrowManager {
     seller: PublicKey,
     escrowAddress: PublicKey
   ): TransactionInstruction {
-    const discriminator = Buffer.from([
-      0x3c, 0x4d, 0x5e, 0x6f, 0x70, 0x81, 0x92, 0xa3
-    ]);
+    const discriminator = getInstructionDiscriminator("mark_delivered");
 
     const keys = [
       { pubkey: seller, isSigner: true, isWritable: false },
@@ -324,9 +332,7 @@ export class EscrowManager {
       this.tokenProgramId
     );
 
-    const discriminator = Buffer.from([
-      0x4d, 0x5e, 0x6f, 0x70, 0x81, 0x92, 0xa3, 0xb4
-    ]);
+    const discriminator = getInstructionDiscriminator("release_funds");
 
     const keys = [
       { pubkey: buyer, isSigner: true, isWritable: false },
@@ -371,9 +377,7 @@ export class EscrowManager {
     reason: string,
     reputationAccounts?: ReputationAccounts
   ): TransactionInstruction {
-    const discriminator = Buffer.from([
-      0x5e, 0x6f, 0x70, 0x81, 0x92, 0xa3, 0xb4, 0xc5
-    ]);
+    const discriminator = getInstructionDiscriminator("initiate_dispute");
 
     const reasonBytes = Buffer.from(reason, "utf-8");
     const data = Buffer.concat([
@@ -434,9 +438,7 @@ export class EscrowManager {
       this.tokenProgramId
     );
 
-    const discriminator = Buffer.from([
-      0x6f, 0x70, 0x81, 0x92, 0xa3, 0xb4, 0xc5, 0xd6
-    ]);
+    const discriminator = getInstructionDiscriminator("resolve_dispute");
 
     const data = Buffer.concat([
       discriminator,
@@ -487,9 +489,7 @@ export class EscrowManager {
       this.tokenProgramId
     );
 
-    const discriminator = Buffer.from([
-      0x70, 0x81, 0x92, 0xa3, 0xb4, 0xc5, 0xd6, 0xe7
-    ]);
+    const discriminator = getInstructionDiscriminator("claim_auto_release");
 
     const keys = [
       { pubkey: seller, isSigner: true, isWritable: false },
@@ -543,9 +543,7 @@ export class EscrowManager {
       this.tokenProgramId
     );
 
-    const discriminator = Buffer.from([
-      0x81, 0x92, 0xa3, 0xb4, 0xc5, 0xd6, 0xe7, 0xf8
-    ]);
+    const discriminator = getInstructionDiscriminator("claim_timeout_refund");
 
     const keys = [
       { pubkey: buyer, isSigner: true, isWritable: false },
@@ -571,9 +569,7 @@ export class EscrowManager {
     buyer: PublicKey,
     escrowAddress: PublicKey
   ): TransactionInstruction {
-    const discriminator = Buffer.from([
-      0x92, 0xa3, 0xb4, 0xc5, 0xd6, 0xe7, 0xf8, 0x09
-    ]);
+    const discriminator = getInstructionDiscriminator("cancel_escrow");
 
     const keys = [
       { pubkey: buyer, isSigner: true, isWritable: true },
@@ -653,45 +649,35 @@ export class EscrowManager {
   }
 
   /**
-   * Check if escrow can be auto-released
+   * Check if escrow can be auto-released.
+   * 
+   * On-chain, auto-release is checked via `can_auto_release()` which uses
+   * the `timeout` field. The escrow must be in Delivered (2) state and
+   * the timeout must have elapsed.
    */
   canAutoRelease(escrow: EscrowAccount): boolean {
     if (escrow.state !== 2) return false; // Must be Delivered
-    if (!escrow.deliveredAt) return false;
-    
-    const releaseTime = escrow.deliveredAt + escrow.autoReleaseDelay;
-    return now() >= releaseTime;
+    return now() >= escrow.timeout;
   }
 
   /**
-   * Check if escrow can be refunded due to timeout
+   * Check if escrow can be refunded due to timeout.
+   * 
+   * The escrow must be in Funded (1) state and the timeout must have elapsed.
    */
   canTimeoutRefund(escrow: EscrowAccount): boolean {
     if (escrow.state !== 1) return false; // Must be Funded (not delivered)
-    
-    const timeoutTime = escrow.createdAt + escrow.deliveryTimeout;
-    return now() >= timeoutTime;
+    return now() >= escrow.timeout;
   }
 
   /**
-   * Get time until auto-release (in seconds)
-   */
-  getTimeUntilAutoRelease(escrow: EscrowAccount): number | null {
-    if (escrow.state !== 2 || !escrow.deliveredAt) return null;
-    
-    const releaseTime = escrow.deliveredAt + escrow.autoReleaseDelay;
-    const remaining = releaseTime - now();
-    return remaining > 0 ? remaining : 0;
-  }
-
-  /**
-   * Get time until timeout refund (in seconds)
+   * Get time until timeout (in seconds).
+   * Works for both auto-release (state=Delivered) and timeout refund (state=Funded).
    */
   getTimeUntilTimeout(escrow: EscrowAccount): number | null {
-    if (escrow.state !== 1) return null;
+    if (escrow.state !== 1 && escrow.state !== 2) return null;
     
-    const timeoutTime = escrow.createdAt + escrow.deliveryTimeout;
-    const remaining = timeoutTime - now();
+    const remaining = escrow.timeout - now();
     return remaining > 0 ? remaining : 0;
   }
 }

@@ -19,6 +19,7 @@ import {
   deriveAgentPolicyPda,
   buildMerkleRoot,
   createBloomFilter,
+  getInstructionDiscriminator,
   now,
 } from "./utils";
 import type {
@@ -171,10 +172,7 @@ export class PolicyManager {
     }
 
     // Build instruction data
-    // Discriminator for initialize_policy (first 8 bytes of sha256("global:initialize_policy"))
-    const discriminator = Buffer.from([
-      0x5b, 0x8d, 0x9e, 0x7f, 0xa1, 0xc2, 0xd3, 0xe4
-    ]);
+    const discriminator = getInstructionDiscriminator("initialize_policy");
 
     const data = Buffer.concat([
       discriminator,
@@ -212,9 +210,7 @@ export class PolicyManager {
     updates: Partial<AgentPolicyConfig>
   ): TransactionInstruction {
     // Build instruction data with optional fields
-    const discriminator = Buffer.from([
-      0x6c, 0x9e, 0xaf, 0x80, 0xb2, 0xd3, 0xe4, 0xf5
-    ]);
+    const discriminator = getInstructionDiscriminator("update_policy");
 
     const parts: Buffer[] = [discriminator];
 
@@ -276,9 +272,7 @@ export class PolicyManager {
     policyAddress: PublicKey,
     newSigner: PublicKey
   ): TransactionInstruction {
-    const discriminator = Buffer.from([
-      0x7d, 0xaf, 0xb0, 0x91, 0xc3, 0xe4, 0xf5, 0x06
-    ]);
+    const discriminator = getInstructionDiscriminator("update_agent_signer");
 
     const data = Buffer.concat([
       discriminator,
@@ -304,9 +298,7 @@ export class PolicyManager {
     owner: PublicKey,
     policyAddress: PublicKey
   ): TransactionInstruction {
-    const discriminator = Buffer.from([
-      0x8e, 0xb0, 0xc1, 0xa2, 0xd4, 0xf5, 0x06, 0x17
-    ]);
+    const discriminator = getInstructionDiscriminator("revoke_agent_authority");
 
     const keys = [
       { pubkey: owner, isSigner: true, isWritable: false },
@@ -328,9 +320,7 @@ export class PolicyManager {
     policyAddress: PublicKey,
     active: boolean
   ): TransactionInstruction {
-    const discriminator = Buffer.from([
-      0x9f, 0xc1, 0xd2, 0xb3, 0xe5, 0x06, 0x17, 0x28
-    ]);
+    const discriminator = getInstructionDiscriminator("set_policy_active");
 
     const data = Buffer.concat([
       discriminator,
@@ -360,9 +350,7 @@ export class PolicyManager {
     recipient: PublicKey,
     reason: string
   ): TransactionInstruction {
-    const discriminator = Buffer.from([
-      0xa0, 0xd1, 0xe2, 0xc3, 0xf5, 0x16, 0x27, 0x38
-    ]);
+    const discriminator = getInstructionDiscriminator("record_blink");
 
     const reasonBytes = Buffer.from(reason, "utf-8");
     const data = Buffer.concat([

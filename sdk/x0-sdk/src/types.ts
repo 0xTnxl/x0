@@ -219,6 +219,8 @@ export interface EscrowConfig {
 
 /** Escrow account data */
 export interface EscrowAccount {
+  /** Account version for future migrations */
+  version: number;
   /** Buyer address */
   buyer: PublicKey;
   /** Seller address */
@@ -235,22 +237,16 @@ export interface EscrowAccount {
   timeout: number;
   /** Creation timestamp */
   createdAt: number;
-  /** Delivered at timestamp */
-  deliveredAt: number | null;
-  /** Delivery timeout seconds */
-  deliveryTimeout: number;
-  /** Auto-release delay seconds */
-  autoReleaseDelay: number;
-  /** Token decimals */
-  tokenDecimals: number;
   /** Delivery proof hash */
   deliveryProof?: Uint8Array;
   /** Dispute evidence hash */
   disputeEvidence?: Uint8Array;
-  /** Dispute reason text */
-  disputeReason?: string;
   /** Token mint */
   mint: PublicKey;
+  /** Token decimals */
+  tokenDecimals: number;
+  /** Slot when dispute was initiated (for arbiter delay) */
+  disputeInitiatedSlot: number;
   /** PDA bump */
   bump: number;
 }
@@ -269,12 +265,10 @@ export interface CreateEscrowParams {
   memo: string;
   /** Service memo (alias for memo, for compatibility) */
   serviceMemo?: string;
-  /** Timeout in seconds */
+  /** Timeout in seconds (maps to on-chain timeout_seconds) */
   timeoutSeconds?: number;
-  /** Delivery timeout in seconds (alias for timeoutSeconds) */
+  /** @deprecated Use timeoutSeconds instead */
   deliveryTimeout?: number;
-  /** Auto-release delay in seconds */
-  autoReleaseDelay?: number;
   /** Token mint */
   mint: PublicKey;
 }
@@ -301,11 +295,7 @@ export interface Capability {
   type: string;
   /** Alias: Type of capability (for registry.ts compatibility) */
   capType?: string;
-  /** Capability version */
-  version: number;
-  /** Price per request in micro-units */
-  pricing: BN;
-  /** JSON metadata with details */
+  /** JSON metadata blob with details (models, pricing, rates, etc.) */
   metadata: string;
 }
 

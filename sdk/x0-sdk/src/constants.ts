@@ -237,6 +237,17 @@ export const MAX_PENDING_BALANCE_CREDIT_COUNTER = 65536;
 /** Confidential transfer proof context seed */
 export const CT_PROOF_CONTEXT_SEED = Buffer.from("ct_proof");
 
+/** Admin action PDA seed (used with nonce for timelock actions) */
+export const ADMIN_ACTION_SEED = Buffer.from("admin_action");
+
+// ============================================================================
+// ZK Verifier Program
+// ============================================================================
+
+export const X0_ZK_VERIFIER_PROGRAM_ID = new PublicKey(
+  "zQWSrznKgcK8aHA4ry7xbSCdP36FqgUHj766YM3pwre"
+);
+
 // ============================================================================
 // Slot-Based Time Constants (for clock manipulation protection)
 // ============================================================================

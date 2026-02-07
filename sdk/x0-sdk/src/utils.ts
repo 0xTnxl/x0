@@ -40,6 +40,24 @@ export function amountAfterFee(amount: BN): BN {
 }
 
 // ============================================================================
+// Instruction Discriminator
+// ============================================================================
+
+/**
+ * Compute the Anchor instruction discriminator for a given instruction name.
+ * This is the first 8 bytes of SHA-256("global:{instruction_name}").
+ *
+ * @param name - The snake_case instruction name (e.g., "initialize_policy")
+ * @returns 8-byte Buffer discriminator
+ */
+export function getInstructionDiscriminator(name: string): Buffer {
+  const hash = createHash("sha256")
+    .update(`global:${name}`)
+    .digest();
+  return Buffer.from(hash.subarray(0, 8));
+}
+
+// ============================================================================
 // Hash Utilities
 // ============================================================================
 

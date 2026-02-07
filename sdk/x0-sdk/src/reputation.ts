@@ -18,7 +18,7 @@ import {
   REPUTATION_DECAY_PERIOD_SECONDS,
   DEFAULT_REPUTATION_SCORE,
 } from "./constants";
-import { deriveReputationPda, now } from "./utils";
+import { deriveReputationPda, now, getInstructionDiscriminator } from "./utils";
 import type { AgentReputationAccount, ReputationSnapshot } from "./types";
 
 // ============================================================================
@@ -157,9 +157,7 @@ export class ReputationManager {
   } {
     const [reputationAddress] = deriveReputationPda(agentPolicyId);
 
-    const discriminator = Buffer.from([
-      0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88
-    ]);
+    const discriminator = getInstructionDiscriminator("initialize_reputation");
 
     const keys = [
       { pubkey: payer, isSigner: true, isWritable: true },
@@ -187,9 +185,7 @@ export class ReputationManager {
     reputationAddress: PublicKey,
     volume: BN
   ): TransactionInstruction {
-    const discriminator = Buffer.from([
-      0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99
-    ]);
+    const discriminator = getInstructionDiscriminator("record_success");
 
     const data = Buffer.concat([
       discriminator,
@@ -216,9 +212,7 @@ export class ReputationManager {
     authority: PublicKey,
     reputationAddress: PublicKey
   ): TransactionInstruction {
-    const discriminator = Buffer.from([
-      0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa
-    ]);
+    const discriminator = getInstructionDiscriminator("record_dispute");
 
     const keys = [
       { pubkey: authority, isSigner: true, isWritable: false },
@@ -240,9 +234,7 @@ export class ReputationManager {
     authority: PublicKey,
     reputationAddress: PublicKey
   ): TransactionInstruction {
-    const discriminator = Buffer.from([
-      0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb
-    ]);
+    const discriminator = getInstructionDiscriminator("record_resolution_favor");
 
     const keys = [
       { pubkey: authority, isSigner: true, isWritable: false },
@@ -274,10 +266,7 @@ export class ReputationManager {
     reputationAddress: PublicKey,
     errorCode: number
   ): TransactionInstruction {
-    // Anchor discriminator for "record_failure"
-    const discriminator = Buffer.from([
-      0xd4, 0xf5, 0x91, 0x8a, 0x3e, 0x4b, 0x27, 0x1c
-    ]);
+    const discriminator = getInstructionDiscriminator("record_failure");
 
     const data = Buffer.concat([
       discriminator,
@@ -312,10 +301,7 @@ export class ReputationManager {
     agentPolicyId: PublicKey,
     reputationAddress: PublicKey
   ): TransactionInstruction {
-    // Anchor discriminator for "migrate_reputation"
-    const discriminator = Buffer.from([
-      0x8e, 0x2c, 0xa3, 0x5f, 0x71, 0xb9, 0x46, 0xd0
-    ]);
+    const discriminator = getInstructionDiscriminator("migrate_reputation");
 
     const keys = [
       { pubkey: owner, isSigner: true, isWritable: true },
@@ -337,13 +323,42 @@ export class ReputationManager {
   buildApplyDecayInstruction(
     reputationAddress: PublicKey
   ): TransactionInstruction {
-    const discriminator = Buffer.from([
-      0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc
-    ]);
+    const discriminator = getInstructionDiscriminator("apply_decay");
 
     const keys = [
       { pubkey: reputationAddress, isSigner: false, isWritable: true },
       { pubkey: SYSVAR_CLOCK_PUBKEY, isSigner: false, isWritable: false },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data: discriminator,
+    });
+  }
+
+  /**
+   * Build instruction to close a reputation account and reclaim rent.
+   * 
+   * Only the policy owner can close the reputation account.
+   * The lamports are returned to the owner.
+   * 
+   * @param owner - The policy owner (signer, receives rent)
+   * @param agentPolicyId - The agent's policy PDA
+   */
+  buildCloseReputationInstruction(
+    owner: PublicKey,
+    agentPolicyId: PublicKey
+  ): TransactionInstruction {
+    const [reputationAddress] = deriveReputationPda(agentPolicyId);
+
+    const discriminator = getInstructionDiscriminator("close_reputation");
+
+    const keys = [
+      { pubkey: owner, isSigner: true, isWritable: true },
+      { pubkey: agentPolicyId, isSigner: false, isWritable: false },
+      { pubkey: reputationAddress, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ];
 
     return new TransactionInstruction({

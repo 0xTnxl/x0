@@ -19,3 +19,4 @@ export * from "./reputation";
 export * from "./confidential";
 export * from "./wrapper";
 export * from "./token";
+export * from "./zk-verifier";

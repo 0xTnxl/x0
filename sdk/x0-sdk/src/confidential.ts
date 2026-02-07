@@ -55,6 +55,7 @@ import {
 import * as crypto from "crypto";
 
 import { X0_TOKEN_PROGRAM_ID } from "./constants";
+import { getInstructionDiscriminator } from "./utils";
 
 // ============================================================================
 // Token-2022 Confidential Transfer Instruction Builders
@@ -600,10 +601,8 @@ export class ConfidentialClient {
     amount: bigint,
     decimals: number
   ): TransactionInstruction {
-    // Instruction discriminator for deposit_confidential
-    const discriminator = Buffer.from([
-      0xd2, 0x1e, 0x5f, 0x3a, 0x8b, 0x7c, 0x4d, 0x2e, // Example discriminator
-    ]);
+    // Anchor discriminator for deposit_confidential (x0-token program)
+    const discriminator = getInstructionDiscriminator("deposit_confidential");
     
     const data = Buffer.alloc(8 + 8 + 1);
     let offset = 0;
@@ -1095,7 +1094,7 @@ export class ConfidentialClient {
 
     // Build verify_withdraw instruction data
     // Instruction discriminator (8 bytes) + proof_data vec + amount u64 + new_decryptable_balance [u8; 36]
-    const discriminator = Buffer.from([0x9b, 0x4f, 0x34, 0x15, 0xc2, 0xa6, 0x2e, 0x07]); // verify_withdraw
+    const discriminator = getInstructionDiscriminator("verify_withdraw");
 
     // Serialize proof_data as Vec<u8> (4 byte length + data)
     const proofLengthBuf = Buffer.alloc(4);
@@ -1186,32 +1185,39 @@ export class ConfidentialClient {
 
   /**
    * Builds a toggle credits instruction.
+   * 
+   * These are Token-2022 ConfidentialTransfer sub-instructions, not x0-token instructions.
    */
   private buildToggleCreditsInstruction(
     tokenAccount: PublicKey,
     isConfidential: boolean,
     enable: boolean
   ): TransactionInstruction {
-    // Choose discriminator based on action
-    let discriminator: Buffer;
+    // Token-2022 ConfidentialTransfer instruction format:
+    // [0]: Token instruction type (27 = ConfidentialTransferExtension)
+    // [1]: ConfidentialTransfer sub-instruction type
+    let subInstruction: ConfidentialTransferInstruction;
     if (isConfidential) {
-      discriminator = enable
-        ? Buffer.from([0xb1, 0x2c, 0x3d, 0x4e, 0x5f, 0x6a, 0x7b, 0x8c]) // enable_confidential_credits
-        : Buffer.from([0xc2, 0x3d, 0x4e, 0x5f, 0x6a, 0x7b, 0x8c, 0x9d]); // disable_confidential_credits
+      subInstruction = enable
+        ? ConfidentialTransferInstruction.EnableConfidentialCredits
+        : ConfidentialTransferInstruction.DisableConfidentialCredits;
     } else {
-      discriminator = enable
-        ? Buffer.from([0xd3, 0x4e, 0x5f, 0x6a, 0x7b, 0x8c, 0x9d, 0xae]) // enable_non_confidential_credits
-        : Buffer.from([0xe4, 0x5f, 0x6a, 0x7b, 0x8c, 0x9d, 0xae, 0xbf]); // disable_non_confidential_credits
+      subInstruction = enable
+        ? ConfidentialTransferInstruction.EnableNonConfidentialCredits
+        : ConfidentialTransferInstruction.DisableNonConfidentialCredits;
     }
+
+    const data = Buffer.alloc(2);
+    data.writeUInt8(TOKEN_INSTRUCTION_CONFIDENTIAL_TRANSFER, 0);
+    data.writeUInt8(subInstruction, 1);
     
     return new TransactionInstruction({
-      programId: X0_TOKEN_PROGRAM_ID,
+      programId: TOKEN_2022_PROGRAM_ID,
       keys: [
-        { pubkey: this.wallet.publicKey, isSigner: true, isWritable: false },
         { pubkey: tokenAccount, isSigner: false, isWritable: true },
-        { pubkey: TOKEN_2022_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: this.wallet.publicKey, isSigner: true, isWritable: false },
       ],
-      data: discriminator,
+      data,
     });
   }
 

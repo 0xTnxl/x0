@@ -9,12 +9,16 @@ import {
   Connection,
   PublicKey,
   TransactionInstruction,
+  SystemProgram,
+  SYSVAR_RENT_PUBKEY,
 } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import BN from "bn.js";
 import {
   X0_WRAPPER_PROGRAM_ID,
+  ADMIN_ACTION_SEED,
 } from "./constants";
+import { getInstructionDiscriminator } from "./utils";
 
 // ============================================================================
 // PDA Seeds
@@ -51,16 +55,54 @@ export interface WrapperConfig {
 
 /** Wrapper statistics */
 export interface WrapperStats {
-  /** Total USDC deposited */
-  totalDeposited: BN;
-  /** Total x0-USD minted */
-  totalMinted: BN;
-  /** Total x0-USD redeemed */
-  totalRedeemed: BN;
-  /** Total fees collected */
-  totalFees: BN;
-  /** Current reserve balance */
-  currentReserve: BN;
+  /** Current USDC balance in reserve */
+  reserveUsdcBalance: BN;
+  /** Outstanding wrapper token supply */
+  outstandingWrapperSupply: BN;
+  /** Total deposits (all-time) */
+  totalDeposits: BN;
+  /** Total redemptions (all-time) */
+  totalRedemptions: BN;
+  /** Total fees collected (all-time) */
+  totalFeesCollected: BN;
+  /** Daily redemption volume (resets every 24h) */
+  dailyRedemptionVolume: BN;
+  /** Timestamp when daily counter was last reset */
+  dailyRedemptionResetTimestamp: number;
+  /** Last update timestamp */
+  lastUpdated: number;
+  /** PDA bump */
+  bump: number;
+}
+
+/** Admin action type enum matching on-chain AdminActionType */
+export enum AdminActionType {
+  /** Change redemption fee rate */
+  SetFeeRate = 0,
+  /** Pause/unpause operations */
+  SetPaused = 1,
+  /** Emergency withdrawal */
+  EmergencyWithdraw = 2,
+  /** Transfer admin to new address */
+  TransferAdmin = 3,
+}
+
+/** A timelocked admin action */
+export interface AdminAction {
+  /** Type of action */
+  actionType: AdminActionType;
+  /** When the action can be executed (unix timestamp) */
+  scheduledTimestamp: number;
+  /** New value (interpretation depends on actionType) */
+  newValue: BN;
+  /** New admin address (only for TransferAdmin) */
+  newAdmin: PublicKey;
+  /** Destination for emergency withdraw */
+  destination: PublicKey;
+  /** Whether this action has been executed */
+  executed: boolean;
+  /** Whether this action has been cancelled */
+  cancelled: boolean;
   /** PDA bump */
   bump: number;
 }
@@ -172,9 +214,7 @@ export class WrapperClient {
       TOKEN_2022_PROGRAM_ID
     );
 
-    const discriminator = Buffer.from([
-      0xf7, 0x5d, 0x3e, 0x1f, 0x2a, 0x4b, 0x6c, 0x8d
-    ]);
+    const discriminator = getInstructionDiscriminator("deposit_and_mint");
 
     const data = Buffer.concat([
       discriminator,
@@ -235,9 +275,7 @@ export class WrapperClient {
       TOKEN_2022_PROGRAM_ID
     );
 
-    const discriminator = Buffer.from([
-      0xa8, 0x6e, 0x4f, 0x20, 0x3b, 0x5c, 0x7d, 0x9e
-    ]);
+    const discriminator = getInstructionDiscriminator("burn_and_redeem");
 
     const data = Buffer.concat([
       discriminator,
@@ -262,6 +300,389 @@ export class WrapperClient {
       programId: this.programId,
       keys,
       data,
+    });
+  }
+
+  // ============================================================================
+  // Admin Instruction Builders
+  // ============================================================================
+
+  /** Derive admin action PDA */
+  deriveAdminActionPda(nonce: BN): [PublicKey, number] {
+    return PublicKey.findProgramAddressSync(
+      [ADMIN_ACTION_SEED, nonce.toArrayLike(Buffer, "le", 8)],
+      this.programId
+    );
+  }
+
+  /**
+   * Build instruction to initialize wrapper configuration.
+   * This creates the WrapperConfig and WrapperStats PDAs.
+   */
+  buildInitializeConfigInstruction(
+    admin: PublicKey,
+    usdcMint: PublicKey,
+    redemptionFeeBps: number
+  ): TransactionInstruction {
+    const [configPda] = this.deriveConfigPda();
+    const [statsPda] = this.deriveStatsPda();
+
+    const discriminator = getInstructionDiscriminator("initialize_config");
+
+    const data = Buffer.alloc(8 + 2);
+    discriminator.copy(data, 0);
+    data.writeUInt16LE(redemptionFeeBps, 8);
+
+    const keys = [
+      { pubkey: admin, isSigner: true, isWritable: true },
+      { pubkey: configPda, isSigner: false, isWritable: true },
+      { pubkey: statsPda, isSigner: false, isWritable: true },
+      { pubkey: usdcMint, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data,
+    });
+  }
+
+  /**
+   * Build instruction to initialize wrapper mint.
+   * Creates the x0-USD Token-2022 mint with extensions and the USDC reserve.
+   */
+  buildInitializeMintInstruction(
+    admin: PublicKey,
+    usdcMint: PublicKey,
+    usdcTokenProgram: PublicKey
+  ): TransactionInstruction {
+    const [configPda] = this.deriveConfigPda();
+    const [wrapperMintPda] = this.deriveWrapperMintPda(usdcMint);
+    const [mintAuthorityPda] = this.deriveMintAuthorityPda(wrapperMintPda);
+    const [reservePda] = this.deriveReservePda(usdcMint);
+
+    const [reserveAuthorityPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("reserve_authority")],
+      this.programId
+    );
+
+    const discriminator = getInstructionDiscriminator("initialize_mint");
+
+    const keys = [
+      { pubkey: admin, isSigner: true, isWritable: true },
+      { pubkey: configPda, isSigner: false, isWritable: true },
+      { pubkey: usdcMint, isSigner: false, isWritable: false },
+      { pubkey: wrapperMintPda, isSigner: false, isWritable: true },
+      { pubkey: mintAuthorityPda, isSigner: false, isWritable: false },
+      { pubkey: reservePda, isSigner: false, isWritable: true },
+      { pubkey: reserveAuthorityPda, isSigner: false, isWritable: false },
+      { pubkey: TOKEN_2022_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: usdcTokenProgram, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data: discriminator,
+    });
+  }
+
+  /**
+   * Build instruction to schedule a fee change (timelocked).
+   * Must wait ADMIN_TIMELOCK_SECONDS before execution.
+   * 
+   * @param admin - Admin signer
+   * @param actionNonce - Unique nonce for the admin action PDA
+   * @param newFeeBps - New redemption fee in basis points
+   */
+  buildScheduleFeeChangeInstruction(
+    admin: PublicKey,
+    actionNonce: BN,
+    newFeeBps: number
+  ): TransactionInstruction {
+    const [configPda] = this.deriveConfigPda();
+    const [actionPda] = this.deriveAdminActionPda(actionNonce);
+
+    const discriminator = getInstructionDiscriminator("schedule_fee_change");
+
+    const data = Buffer.alloc(8 + 8 + 2);
+    discriminator.copy(data, 0);
+    actionNonce.toArrayLike(Buffer, "le", 8).copy(data, 8);
+    data.writeUInt16LE(newFeeBps, 16);
+
+    const keys = [
+      { pubkey: admin, isSigner: true, isWritable: true },
+      { pubkey: configPda, isSigner: false, isWritable: false },
+      { pubkey: actionPda, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data,
+    });
+  }
+
+  /**
+   * Build instruction to execute a scheduled fee change.
+   * Only succeeds after timelock period has elapsed.
+   */
+  buildExecuteFeeChangeInstruction(
+    admin: PublicKey,
+    actionPda: PublicKey
+  ): TransactionInstruction {
+    const [configPda] = this.deriveConfigPda();
+
+    const discriminator = getInstructionDiscriminator("execute_fee_change");
+
+    const keys = [
+      { pubkey: admin, isSigner: true, isWritable: false },
+      { pubkey: configPda, isSigner: false, isWritable: true },
+      { pubkey: actionPda, isSigner: false, isWritable: true },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data: discriminator,
+    });
+  }
+
+  /**
+   * Build instruction to schedule a pause/unpause (timelocked).
+   */
+  buildSchedulePauseInstruction(
+    admin: PublicKey,
+    actionNonce: BN,
+    pause: boolean
+  ): TransactionInstruction {
+    const [configPda] = this.deriveConfigPda();
+    const [actionPda] = this.deriveAdminActionPda(actionNonce);
+
+    const discriminator = getInstructionDiscriminator("schedule_pause");
+
+    const data = Buffer.alloc(8 + 8 + 1);
+    discriminator.copy(data, 0);
+    actionNonce.toArrayLike(Buffer, "le", 8).copy(data, 8);
+    data.writeUInt8(pause ? 1 : 0, 16);
+
+    const keys = [
+      { pubkey: admin, isSigner: true, isWritable: true },
+      { pubkey: configPda, isSigner: false, isWritable: false },
+      { pubkey: actionPda, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data,
+    });
+  }
+
+  /**
+   * Build instruction to execute a scheduled pause/unpause.
+   */
+  buildExecutePauseInstruction(
+    admin: PublicKey,
+    actionPda: PublicKey
+  ): TransactionInstruction {
+    const [configPda] = this.deriveConfigPda();
+
+    const discriminator = getInstructionDiscriminator("execute_pause");
+
+    const keys = [
+      { pubkey: admin, isSigner: true, isWritable: false },
+      { pubkey: configPda, isSigner: false, isWritable: true },
+      { pubkey: actionPda, isSigner: false, isWritable: true },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data: discriminator,
+    });
+  }
+
+  /**
+   * Build instruction for emergency pause (bypasses timelock).
+   * Immediately pauses the wrapper — no timelock required.
+   */
+  buildEmergencyPauseInstruction(
+    admin: PublicKey
+  ): TransactionInstruction {
+    const [configPda] = this.deriveConfigPda();
+
+    const discriminator = getInstructionDiscriminator("emergency_pause");
+
+    const keys = [
+      { pubkey: admin, isSigner: true, isWritable: false },
+      { pubkey: configPda, isSigner: false, isWritable: true },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data: discriminator,
+    });
+  }
+
+  /**
+   * Build instruction to schedule an emergency withdrawal (timelocked).
+   * 
+   * @param admin - Admin signer
+   * @param actionNonce - Unique nonce for the admin action PDA
+   * @param amount - Amount of USDC to withdraw from reserve
+   * @param destination - Destination pubkey (must match on execution)
+   */
+  buildScheduleEmergencyWithdrawInstruction(
+    admin: PublicKey,
+    actionNonce: BN,
+    amount: BN,
+    destination: PublicKey
+  ): TransactionInstruction {
+    const [configPda] = this.deriveConfigPda();
+    const [actionPda] = this.deriveAdminActionPda(actionNonce);
+
+    const discriminator = getInstructionDiscriminator("schedule_emergency_withdraw");
+
+    const data = Buffer.alloc(8 + 8 + 8 + 32);
+    discriminator.copy(data, 0);
+    actionNonce.toArrayLike(Buffer, "le", 8).copy(data, 8);
+    amount.toArrayLike(Buffer, "le", 8).copy(data, 16);
+    destination.toBuffer().copy(data, 24);
+
+    const keys = [
+      { pubkey: admin, isSigner: true, isWritable: true },
+      { pubkey: configPda, isSigner: false, isWritable: false },
+      { pubkey: actionPda, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data,
+    });
+  }
+
+  /**
+   * Build instruction to execute an emergency withdrawal.
+   * Transfers USDC from reserve to the scheduled destination.
+   */
+  buildExecuteEmergencyWithdrawInstruction(
+    admin: PublicKey,
+    actionPda: PublicKey,
+    usdcMint: PublicKey,
+    destinationAccount: PublicKey,
+    usdcTokenProgram: PublicKey
+  ): TransactionInstruction {
+    const [configPda] = this.deriveConfigPda();
+    const [statsPda] = this.deriveStatsPda();
+    const [reservePda] = this.deriveReservePda(usdcMint);
+
+    const [reserveAuthorityPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("reserve_authority")],
+      this.programId
+    );
+
+    const discriminator = getInstructionDiscriminator("execute_emergency_withdraw");
+
+    const keys = [
+      { pubkey: admin, isSigner: true, isWritable: false },
+      { pubkey: configPda, isSigner: false, isWritable: true },
+      { pubkey: statsPda, isSigner: false, isWritable: true },
+      { pubkey: actionPda, isSigner: false, isWritable: true },
+      { pubkey: usdcMint, isSigner: false, isWritable: false },
+      { pubkey: reservePda, isSigner: false, isWritable: true },
+      { pubkey: destinationAccount, isSigner: false, isWritable: true },
+      { pubkey: reserveAuthorityPda, isSigner: false, isWritable: false },
+      { pubkey: usdcTokenProgram, isSigner: false, isWritable: false },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data: discriminator,
+    });
+  }
+
+  /**
+   * Build instruction to cancel a scheduled admin action.
+   */
+  buildCancelAdminActionInstruction(
+    admin: PublicKey,
+    actionPda: PublicKey
+  ): TransactionInstruction {
+    const [configPda] = this.deriveConfigPda();
+
+    const discriminator = getInstructionDiscriminator("cancel_admin_action");
+
+    const keys = [
+      { pubkey: admin, isSigner: true, isWritable: false },
+      { pubkey: configPda, isSigner: false, isWritable: false },
+      { pubkey: actionPda, isSigner: false, isWritable: true },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data: discriminator,
+    });
+  }
+
+  /**
+   * Build instruction to initiate an admin transfer (2-step process).
+   * Sets the pending admin; new admin must call accept_admin_transfer.
+   */
+  buildInitiateAdminTransferInstruction(
+    admin: PublicKey,
+    newAdmin: PublicKey
+  ): TransactionInstruction {
+    const [configPda] = this.deriveConfigPda();
+
+    const discriminator = getInstructionDiscriminator("initiate_admin_transfer");
+
+    const data = Buffer.alloc(8 + 32);
+    discriminator.copy(data, 0);
+    newAdmin.toBuffer().copy(data, 8);
+
+    const keys = [
+      { pubkey: admin, isSigner: true, isWritable: false },
+      { pubkey: configPda, isSigner: false, isWritable: true },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data,
+    });
+  }
+
+  /**
+   * Build instruction to accept an admin transfer.
+   * Must be signed by the pending admin set in initiate_admin_transfer.
+   */
+  buildAcceptAdminTransferInstruction(
+    newAdmin: PublicKey
+  ): TransactionInstruction {
+    const [configPda] = this.deriveConfigPda();
+
+    const discriminator = getInstructionDiscriminator("accept_admin_transfer");
+
+    const keys = [
+      { pubkey: newAdmin, isSigner: true, isWritable: false },
+      { pubkey: configPda, isSigner: false, isWritable: true },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data: discriminator,
     });
   }
 
@@ -350,29 +771,41 @@ export class WrapperClient {
     // Skip 8-byte discriminator
     let offset = 8;
 
-    const totalDeposited = new BN(data.slice(offset, offset + 8), "le");
+    const reserveUsdcBalance = new BN(data.slice(offset, offset + 8), "le");
     offset += 8;
 
-    const totalMinted = new BN(data.slice(offset, offset + 8), "le");
+    const outstandingWrapperSupply = new BN(data.slice(offset, offset + 8), "le");
     offset += 8;
 
-    const totalRedeemed = new BN(data.slice(offset, offset + 8), "le");
+    const totalDeposits = new BN(data.slice(offset, offset + 8), "le");
     offset += 8;
 
-    const totalFees = new BN(data.slice(offset, offset + 8), "le");
+    const totalRedemptions = new BN(data.slice(offset, offset + 8), "le");
     offset += 8;
 
-    const currentReserve = new BN(data.slice(offset, offset + 8), "le");
+    const totalFeesCollected = new BN(data.slice(offset, offset + 8), "le");
     offset += 8;
 
-    const bump = data[offset];
+    const dailyRedemptionVolume = new BN(data.slice(offset, offset + 8), "le");
+    offset += 8;
+
+    const dailyRedemptionResetTimestamp = new BN(data.slice(offset, offset + 8), "le").toNumber();
+    offset += 8;
+
+    const lastUpdated = new BN(data.slice(offset, offset + 8), "le").toNumber();
+    offset += 8;
+
+    const bump = data[offset]!;
 
     return {
-      totalDeposited,
-      totalMinted,
-      totalRedeemed,
-      totalFees,
-      currentReserve,
+      reserveUsdcBalance,
+      outstandingWrapperSupply,
+      totalDeposits,
+      totalRedemptions,
+      totalFeesCollected,
+      dailyRedemptionVolume,
+      dailyRedemptionResetTimestamp,
+      lastUpdated,
       bump,
     };
   }

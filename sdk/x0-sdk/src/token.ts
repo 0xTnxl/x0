@@ -284,6 +284,45 @@ export class TokenClient {
     });
   }
 
+  /**
+   * Build instruction to harvest withheld transfer fees from token accounts.
+   * 
+   * Unlike withdraw_fees which moves fees to the fee receiver,
+   * harvest_fees collects withheld fees from individual token accounts
+   * back to the mint's withheld amount, where they can then be withdrawn.
+   * 
+   * @param mint - The token mint
+   * @param authority - The mint authority (signer)
+   * @param sourceAccounts - Token accounts to harvest fees from (passed as remaining accounts)
+   */
+  buildHarvestFeesInstruction(
+    mint: PublicKey,
+    authority: PublicKey,
+    sourceAccounts: PublicKey[]
+  ): TransactionInstruction {
+    const discriminator = getInstructionDiscriminator("global", "harvest_fees");
+
+    const data = Buffer.from(discriminator);
+
+    const keys = [
+      { pubkey: authority, isSigner: true, isWritable: false },
+      { pubkey: mint, isSigner: false, isWritable: true },
+      { pubkey: TOKEN_2022_PROGRAM_ID, isSigner: false, isWritable: false },
+      // Source accounts to harvest from (remaining accounts)
+      ...sourceAccounts.map((account) => ({
+        pubkey: account,
+        isSigner: false,
+        isWritable: true,
+      })),
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data,
+    });
+  }
+
   // ============================================================================
   // Helper Methods
   // ============================================================================

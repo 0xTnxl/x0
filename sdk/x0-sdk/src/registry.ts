@@ -16,7 +16,7 @@ import {
   MAX_CAPABILITIES,
   MAX_METADATA_SIZE,
 } from "./constants";
-import { deriveRegistryPda, deriveReputationPda } from "./utils";
+import { deriveRegistryPda, getInstructionDiscriminator } from "./utils";
 import type {
   AgentRegistryEntry,
   Capability,
@@ -76,10 +76,10 @@ export class RegistryManager {
   private parseRegistryEntry(data: Buffer): AgentRegistryEntry {
     let offset = 8; // Skip discriminator
 
-    const agentId = new PublicKey(data.slice(offset, offset + 32));
-    offset += 32;
+    // version: u8 (skip)
+    offset += 1;
 
-    const owner = new PublicKey(data.slice(offset, offset + 32));
+    const agentId = new PublicKey(data.slice(offset, offset + 32));
     offset += 32;
 
     // Endpoint (String)
@@ -88,7 +88,7 @@ export class RegistryManager {
     const endpoint = data.slice(offset, offset + endpointLen).toString("utf-8");
     offset += endpointLen;
 
-    // Capabilities (Vec<Capability>)
+    // Capabilities (Vec<Capability>) - on-chain: { capability_type: String, metadata: String }
     const capsLen = data.readUInt32LE(offset);
     offset += 4;
     const capabilities: Capability[] = [];
@@ -99,38 +99,47 @@ export class RegistryManager {
       const capType = data.slice(offset, offset + typeLen).toString("utf-8");
       offset += typeLen;
 
-      const version = data.readUInt16LE(offset);
-      offset += 2;
+      const metaLen = data.readUInt32LE(offset);
+      offset += 4;
+      const metadata = data.slice(offset, offset + metaLen).toString("utf-8");
+      offset += metaLen;
 
-      // Pricing (BN as u64)
-      const pricingLow = data.readUInt32LE(offset);
-      const pricingHigh = data.readUInt32LE(offset + 4);
-      offset += 8;
-      const pricing = new BN(pricingLow).add(new BN(pricingHigh).shln(32));
-
-      capabilities.push({ capType, type: capType, version, pricing, metadata: "" });
+      capabilities.push({ capType, type: capType, metadata });
     }
 
-    // Skip metadata JSON (String) - not currently used but reserved for future
-    const metadataLen = data.readUInt32LE(offset);
-    offset += 4 + metadataLen;
+    // price_oracle: Option<Pubkey>
+    const hasPriceOracle = data[offset]! === 1;
+    offset += 1;
+    if (hasPriceOracle) {
+      offset += 32; // skip the pubkey
+    }
 
-    // Skip registered timestamp - reserved for future use
+    // reputation_pda: Pubkey
+    const reputationPda = new PublicKey(data.slice(offset, offset + 32));
+    offset += 32;
+
+    // last_updated: i64
+    const lastUpdated = new BN(data.slice(offset, offset + 8), "le").toNumber();
     offset += 8;
 
-    const lastActiveAt = new BN(data.slice(offset, offset + 8), "le").toNumber();
-    offset += 8;
+    // is_active: bool
+    const isActive = data[offset]! === 1;
+    offset += 1;
 
-    const isActive = data[offset] === 1;
-    // Note: bump is at offset+1 but not currently needed
+    // owner: Pubkey
+    const owner = new PublicKey(data.slice(offset, offset + 32));
+    offset += 32;
+
+    // bump: u8
+    // const bump = data[offset]!;
 
     return {
       agentId,
       owner,
       endpoint,
       capabilities,
-      reputationPda: deriveReputationPda(agentId)[0],
-      lastUpdated: lastActiveAt,
+      reputationPda,
+      lastUpdated,
       isActive,
     };
   }
@@ -159,13 +168,11 @@ export class RegistryManager {
       throw new Error(`Metadata too large (max ${MAX_METADATA_SIZE} bytes)`);
     }
 
-    const discriminator = Buffer.from([
-      0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11
-    ]);
+    const discriminator = getInstructionDiscriminator("register_agent");
 
     const endpointBytes = Buffer.from(params.endpoint, "utf-8");
 
-    // Serialize capabilities
+    // Serialize capabilities (on-chain: Vec<Capability { capability_type: String, metadata: String }>)
     const capParts: Buffer[] = [];
     capParts.push(Buffer.from(new Uint32Array([params.capabilities.length]).buffer));
     
@@ -174,8 +181,11 @@ export class RegistryManager {
       const typeBytes = Buffer.from(capType, "utf-8");
       capParts.push(Buffer.from(new Uint32Array([typeBytes.length]).buffer));
       capParts.push(typeBytes);
-      capParts.push(Buffer.from(new Uint16Array([cap.version]).buffer));
-      capParts.push(cap.pricing.toArrayLike(Buffer, "le", 8));
+
+      const capMeta = cap.metadata ?? "";
+      const metaBytes = Buffer.from(capMeta, "utf-8");
+      capParts.push(Buffer.from(new Uint32Array([metaBytes.length]).buffer));
+      capParts.push(metaBytes);
     }
 
     const data = Buffer.concat([
@@ -216,9 +226,7 @@ export class RegistryManager {
       metadataJson?: string;
     }
   ): TransactionInstruction {
-    const discriminator = Buffer.from([
-      0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11, 0x22
-    ]);
+    const discriminator = getInstructionDiscriminator("update_registry");
 
     const parts: Buffer[] = [discriminator];
 
@@ -242,8 +250,11 @@ export class RegistryManager {
         const typeBytes = Buffer.from(capType, "utf-8");
         parts.push(Buffer.from(new Uint32Array([typeBytes.length]).buffer));
         parts.push(typeBytes);
-        parts.push(Buffer.from(new Uint16Array([cap.version]).buffer));
-        parts.push(cap.pricing.toArrayLike(Buffer, "le", 8));
+
+        const capMeta = cap.metadata ?? "";
+        const metaBytes = Buffer.from(capMeta, "utf-8");
+        parts.push(Buffer.from(new Uint32Array([metaBytes.length]).buffer));
+        parts.push(metaBytes);
       }
     } else {
       parts.push(Buffer.from([0]));
@@ -280,9 +291,7 @@ export class RegistryManager {
     owner: PublicKey,
     registryAddress: PublicKey
   ): TransactionInstruction {
-    const discriminator = Buffer.from([
-      0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11, 0x22, 0x33
-    ]);
+    const discriminator = getInstructionDiscriminator("deactivate_entry");
 
     const keys = [
       { pubkey: owner, isSigner: true, isWritable: false },
@@ -303,9 +312,7 @@ export class RegistryManager {
     owner: PublicKey,
     registryAddress: PublicKey
   ): TransactionInstruction {
-    const discriminator = Buffer.from([
-      0xdd, 0xee, 0xff, 0x00, 0x11, 0x22, 0x33, 0x44
-    ]);
+    const discriminator = getInstructionDiscriminator("reactivate_entry");
 
     const keys = [
       { pubkey: owner, isSigner: true, isWritable: false },
@@ -326,9 +333,7 @@ export class RegistryManager {
     owner: PublicKey,
     registryAddress: PublicKey
   ): TransactionInstruction {
-    const discriminator = Buffer.from([
-      0xee, 0xff, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55
-    ]);
+    const discriminator = getInstructionDiscriminator("deregister_agent");
 
     const keys = [
       { pubkey: owner, isSigner: true, isWritable: true },
@@ -394,7 +399,11 @@ export class RegistryManager {
   }
 
   /**
-   * Find cheapest agent for a capability
+   * Find cheapest agent for a capability.
+   * 
+   * Parses pricing from the capability's metadata JSON field.
+   * Expected metadata format: `{ "pricing": 1000, ... }` (pricing in micro-units)
+   * Returns null if no agents found or none have pricing metadata.
    */
   async findCheapestAgent(
     capType: string
@@ -402,23 +411,33 @@ export class RegistryManager {
     address: PublicKey;
     entry: AgentRegistryEntry;
     capability: Capability;
+    pricing: number;
   } | null> {
     const agents = await this.findAgentsByCapability(capType);
     
     if (agents.length === 0) return null;
 
-    const cheapest = agents.reduce((best, current) => {
-      if (current.matchingCapability.pricing.lt(best.matchingCapability.pricing)) {
-        return current;
+    // Extract pricing from metadata
+    const withPricing = agents.map(({ address, entry, matchingCapability }) => {
+      let pricing = Infinity;
+      try {
+        const meta = JSON.parse(matchingCapability.metadata);
+        if (typeof meta.pricing === "number") {
+          pricing = meta.pricing;
+        }
+      } catch {
+        // No valid pricing metadata
       }
-      return best;
-    });
+      return { address, entry, capability: matchingCapability, pricing };
+    }).filter(a => a.pricing < Infinity);
+
+    if (withPricing.length === 0) return null;
+
+    const cheapest = withPricing.reduce((best, current) =>
+      current.pricing < best.pricing ? current : best
+    );
     
-    return {
-      address: cheapest.address,
-      entry: cheapest.entry,
-      capability: cheapest.matchingCapability,
-    };
+    return cheapest;
   }
 
   /**
@@ -448,18 +467,18 @@ export class RegistryManager {
 
   /**
    * Create a capability definition
+   * 
+   * On-chain capabilities have a type string and a JSON metadata blob.
+   * Use the metadata field to encode pricing, versioning, and other details.
    */
   createCapability(
     capType: string,
-    version: number,
-    pricingPerCall: BN
+    metadata: string = "{}"
   ): Capability {
     return {
       capType,
       type: capType,
-      version,
-      pricing: pricingPerCall,
-      metadata: "",
+      metadata,
     };
   }
 
