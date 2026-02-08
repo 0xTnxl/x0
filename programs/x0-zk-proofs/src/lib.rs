@@ -22,3 +22,25 @@ pub use proofs::*;
 pub fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_returns_cargo_version() {
+        let v = version();
+        assert_eq!(v, env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn version_is_semver() {
+        let v = version();
+        let parts: Vec<&str> = v.split('.').collect();
+        assert_eq!(parts.len(), 3, "version should be semver: {v}");
+        for part in &parts {
+            part.parse::<u32>()
+                .unwrap_or_else(|_| panic!("non-numeric semver component: {part}"));
+        }
+    }
+}
