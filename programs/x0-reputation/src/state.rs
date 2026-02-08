@@ -111,10 +111,10 @@ impl AgentReputation {
         };
 
         // Weighted score: 60% success, 15% resolution, 10% inverse dispute, 15% inverse failure
-        (success_rate * 0.60)
-            + (resolution_rate * 0.15)
-            + ((1.0 - dispute_rate) * 0.10)
-            + ((1.0 - failure_rate) * 0.15)
+        (success_rate * REPUTATION_SUCCESS_WEIGHT)
+            + (resolution_rate * REPUTATION_RESOLUTION_WEIGHT)
+            + ((1.0 - dispute_rate) * REPUTATION_DISPUTE_WEIGHT)
+            + ((1.0 - failure_rate) * REPUTATION_FAILURE_WEIGHT)
     }
 
     /// Check if agent has minimum transactions for reliable score

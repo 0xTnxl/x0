@@ -254,10 +254,12 @@ pub const CU_DOMAIN_VERIFY: u32 = 400;
 // Reputation System
 // ============================================================================
 
-/// Reputation score weights
-pub const REPUTATION_SUCCESS_WEIGHT: f64 = 0.7;
-pub const REPUTATION_RESOLUTION_WEIGHT: f64 = 0.2;
-pub const REPUTATION_DISPUTE_WEIGHT: f64 = 0.1;
+/// Reputation score weights (used in calculate_score formula)
+/// S = W_s * success_rate + W_r * resolution_rate + W_d * (1 - dispute_rate) + W_f * (1 - failure_rate)
+pub const REPUTATION_SUCCESS_WEIGHT: f64 = 0.60;
+pub const REPUTATION_RESOLUTION_WEIGHT: f64 = 0.15;
+pub const REPUTATION_DISPUTE_WEIGHT: f64 = 0.10;
+pub const REPUTATION_FAILURE_WEIGHT: f64 = 0.15;
 
 /// Monthly reputation decay rate (1%)
 pub const REPUTATION_DECAY_RATE_BPS: u16 = 100;

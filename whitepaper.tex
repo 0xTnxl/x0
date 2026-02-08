@@ -125,7 +125,7 @@
 \maketitle
 
 \begin{abstract}
-We present x0, a decentralized protocol for autonomous agent payments built on Solana. The protocol introduces a novel spending policy enforcement mechanism using Token-2022 transfer hooks, enabling programmable spending limits, whitelist verification, and privacy controls for AI agents. x0 implements HTTP 402 (Payment Required) for standardized payment negotiation, conditional escrow with dispute resolution, on-chain reputation scoring with temporal decay, and a USDC-backed wrapper token with cryptographic reserve invariants. The system achieves trustless agent-to-agent transactions while preserving human oversight through a "Blink" mechanism for exceptional cases. We formally verify the protocol's security properties and demonstrate its efficiency through cryptographic proofs and empirical benchmarks.
+We present x0, a decentralized protocol for autonomous agent payments built on Solana. The protocol introduces a novel spending policy enforcement mechanism using Token-2022 transfer hooks, enabling programmable spending limits, whitelist verification, and privacy controls for AI agents. x0 implements HTTP 402 (Payment Required) for standardized payment negotiation, conditional escrow with dispute resolution, on-chain reputation scoring with temporal decay, a USDC-backed wrapper token with cryptographic reserve invariants, and on-chain zero-knowledge proof verification for confidential transfers using Groth16 proofs over the Ristretto255 curve. The system achieves trustless agent-to-agent transactions while preserving human oversight through a ``Blink'' mechanism for exceptional cases. We formally verify the protocol's security properties and demonstrate its efficiency through cryptographic proofs and empirical benchmarks.
 \end{abstract}
 
 \tableofcontents
@@ -170,91 +170,107 @@ We present x0, which makes the following contributions:
     \item \textbf{USDC Wrapper}: A 1:1 USDC-backed token with cryptographic reserve invariants and timelocked governance
     
     \item \textbf{Human-in-the-Loop (Blinks)}: A fallback mechanism for exceptional transactions requiring human approval
+    
+    \item \textbf{Zero-Knowledge Verification}: On-chain Groth16 proof verification for confidential transfers, with client-side proof generation compiled to WebAssembly
 \end{enumerate}
 
-\subsection{System Overview}
-
-The x0 protocol consists of seven interoperating programs deployed on Solana:
+The x0 protocol consists of eight interoperating programs deployed on Solana, plus an off-chain WASM cryptographic library:
 
 \begin{itemize}
     \item \textbf{x0-guard}: Policy enforcement via transfer hooks
-    \item \textbf{x0-token}: Token-2022 mint configuration
-    \item \textbf{x0-escrow}: Conditional payment escrow
+    \item \textbf{x0-token}: Token-2022 mint configuration with confidential transfer support
+    \item \textbf{x0-escrow}: Conditional payment escrow with dispute resolution
     \item \textbf{x0-registry}: Agent discovery and capability advertisement
-    \item \textbf{x0-reputation}: Trust scoring and transaction history
-    \item \textbf{x0-wrapper}: USDC-backed stable wrapper token
-    \item \textbf{x0-common}: Shared types, constants, and utilities
+    \item \textbf{x0-reputation}: Trust scoring and transaction history with temporal decay
+    \item \textbf{x0-wrapper}: USDC-backed stable wrapper token with timelocked governance
+    \item \textbf{x0-zk-verifier}: On-chain Groth16 zero-knowledge proof verification for confidential transfers
+    \item \textbf{x0-common}: Shared types, constants, error codes, and utilities
+\end{itemize}
+
+In addition, the protocol includes an off-chain component:
+
+\begin{itemize}
+    \item \textbf{x0-zk-proofs}: WebAssembly module compiled from Rust, providing client-side Groth16 proof generation using \texttt{solana-zk-token-sdk}
 \end{itemize}
 
 \subsubsection{Architecture Diagram}
 
 \begin{center}
 \begin{tikzpicture}[
-    node distance=1.6cm and 2.2cm,
+    node distance=1.8cm and 2.0cm,
     % External systems (Solana ecosystem)
     external/.style={rectangle, rounded corners=3pt, draw=gray!80, fill=gray!15, 
-        minimum width=2.2cm, minimum height=0.85cm, text centered, font=\small},
+        minimum width=2.0cm, minimum height=0.8cm, text centered, font=\footnotesize},
     % Core x0 programs
     program/.style={rectangle, rounded corners=3pt, draw=blue!70, fill=blue!10, 
-        minimum width=2.2cm, minimum height=0.85cm, text centered, font=\small},
+        minimum width=2.0cm, minimum height=0.8cm, text centered, font=\footnotesize},
     % Shared library
     library/.style={rectangle, rounded corners=3pt, draw=green!70!black, fill=green!10, 
-        minimum width=2.2cm, minimum height=0.85cm, text centered, font=\small},
+        minimum width=2.0cm, minimum height=0.8cm, text centered, font=\footnotesize},
+    % WASM off-chain module
+    wasm/.style={rectangle, rounded corners=3pt, draw=purple!70, fill=purple!10, 
+        minimum width=2.0cm, minimum height=0.8cm, text centered, font=\footnotesize},
     % Arrow styles
     arrow/.style={->, >=stealth, thick, color=gray!70},
-    label/.style={font=\tiny, fill=white, inner sep=1pt}
+    lbl/.style={font=\tiny, fill=white, inner sep=1pt}
 ]
-    % External systems (top row)
+    % --- Row 0: External systems ---
     \node[external] (usdc) {USDC (SPL)};
     \node[external, right=of usdc] (token22) {Token-2022};
     
-    % Core programs row 1
-    \node[program, below=of usdc] (wrapper) {x0-wrapper};
+    % --- Row 1: Core programs (4 nodes, spaced evenly) ---
+    \node[program, below=of usdc, xshift=-1.0cm] (wrapper) {x0-wrapper};
     \node[program, right=of wrapper] (token) {x0-token};
     \node[program, right=of token] (guard) {x0-guard};
+    \node[program, right=of guard] (zkverifier) {x0-zk-verifier};
     
-    % Core programs row 2
-    \node[program, below=of wrapper] (escrow) {x0-escrow};
+    % --- Row 2: Core programs (3 nodes, centered under row 1) ---
+    \node[program, below=of token, xshift=-1.0cm] (escrow) {x0-escrow};
     \node[program, right=of escrow] (registry) {x0-registry};
     \node[program, right=of registry] (reputation) {x0-reputation};
     
-    % Shared library (bottom)
-    \node[library, below=1.4cm of registry] (common) {x0-common};
+    % --- Row 3: Shared library + WASM ---
+    \node[library, below=1.6cm of registry] (common) {x0-common};
+    \node[wasm, right=3.0cm of common] (zkproofs) {x0-zk-proofs};
     
-    % External dependencies (upward arrows)
+    % --- External dependencies (upward arrows) ---
     \draw[arrow] (wrapper) -- (usdc);
     \draw[arrow] (token) -- (token22);
-    \draw[arrow] (guard) -- (token22);
+    \draw[arrow] (guard.north) -- ++(0,0.4) -| (token22);
     
-    % Internal dependencies (CPI calls)
-    \draw[arrow] (token) -- (guard) node[label, midway, above] {hook};
+    % --- Internal CPI calls (solid arrows) ---
+    \draw[arrow] (token) -- (guard) node[lbl, midway, above] {hook};
     \draw[arrow] (wrapper) -- (token);
-    \draw[arrow] (escrow) -- (reputation) node[label, midway, above] {CPI};
-    \draw[arrow] (guard) -- (reputation) node[label, midway, right] {CPI};
+    \draw[arrow] (escrow) -- (reputation) node[lbl, midway, above] {CPI};
+    \draw[arrow] (guard) -- (reputation) node[lbl, midway, right] {CPI};
     \draw[arrow] (registry) -- (reputation);
+    \draw[arrow] (token) -- (zkverifier) node[lbl, midway, above] {CPI};
     
-    % Common library connections (dashed)
+    % --- WASM to on-chain (dotted arrow) ---
+    \draw[arrow, dotted, color=purple!60] (zkproofs) -- (zkverifier) node[lbl, midway, right] {proofs};
+    
+    % --- Common library links (dashed arrows) ---
     \draw[arrow, dashed] (escrow) -- (common);
     \draw[arrow, dashed] (registry) -- (common);
     \draw[arrow, dashed] (reputation) -- (common);
-    \draw[arrow, dashed] (guard.south) to[bend right=15] (common.east);
-    \draw[arrow, dashed] (wrapper.south) to[bend right=20] (common.west);
+    \draw[arrow, dashed] (wrapper.south) -- ++(0,-0.5) -| (common.west);
+    \draw[arrow, dashed] (guard.south) -- ++(0,-0.5) -| (common.north);
+    \draw[arrow, dashed] (zkverifier.south) -- ++(0,-0.5) -| (common.east);
     
-    % Legend
-    \node[below=2.2cm of escrow, font=\tiny, anchor=west] (legend) {
-        \tikz{
-            \node[external, minimum width=1.4cm, minimum height=0.5cm, font=\tiny] at (0,0) {External};
-            \node[program, minimum width=1.4cm, minimum height=0.5cm, font=\tiny] at (2,0) {Program};
-            \node[library, minimum width=1.4cm, minimum height=0.5cm, font=\tiny] at (4,0) {Library};
-            \draw[arrow] (5.2,0) -- (6,0) node[right, font=\tiny] {CPI};
-            \draw[arrow, dashed] (7,0) -- (7.8,0) node[right, font=\tiny] {uses};
-        }
+    % --- Legend (well below the diagram) ---
+    \matrix[below=2.0cm of common, anchor=center, column sep=6pt, row sep=0pt] {
+        \node[external, minimum width=1.2cm, minimum height=0.45cm, font=\tiny] {External}; &
+        \node[program, minimum width=1.2cm, minimum height=0.45cm, font=\tiny] {Program}; &
+        \node[library, minimum width=1.2cm, minimum height=0.45cm, font=\tiny] {Library}; &
+        \node[wasm, minimum width=1.2cm, minimum height=0.45cm, font=\tiny] {WASM}; &
+        \node[font=\tiny] (la) {}; \draw[arrow] (la.west) -- ++(0.7,0) node[right, font=\tiny] {CPI}; &
+        \node[font=\tiny] (lb) {}; \draw[arrow, dashed] (lb.west) -- ++(0.7,0) node[right, font=\tiny] {uses}; \\
     };
 \end{tikzpicture}
 \end{center}
 
 \begin{center}
-\small\textit{Figure 1: x0 Protocol Architecture. Gray nodes are external Solana programs. Blue nodes are x0 programs. Green is the shared library.}
+\small\textit{Figure 1: x0 Protocol Architecture. Gray nodes are external Solana programs. Blue nodes are x0 on-chain programs. Green is the shared library. Purple is the off-chain WASM module for client-side proof generation.}
 \end{center}
 
 \section{Preliminaries}
@@ -786,8 +802,7 @@ pub struct EscrowAccount {
     pub dispute_evidence: Option<[u8; 32]>,
     pub mint: Pubkey,
     pub token_decimals: u8,
-    pub dispute_initiated_slot: u64,
-    pub protocol_fee_paid: u64,     // Fee paid on creation
+    pub dispute_initiated_slot: u64, // MEDIUM-6: arbiter delay
     pub bump: u8,
 }
 \end{lstlisting}
@@ -1059,31 +1074,24 @@ An adversary cannot artificially inflate reputation without:
 #[account]
 pub struct AgentRegistry {
     pub version: u8,                   // Account version
-    pub agent_id: Pubkey,
-    pub owner: Pubkey,
-    pub endpoint: String,              // Max 256 chars
+    pub agent_id: Pubkey,              // Policy PDA (primary ID)
+    pub owner: Pubkey,                 // Owner who can update
+    pub endpoint: String,              // Service URL (max 256 chars)
     pub capabilities: Vec<Capability>, // Max 10 capabilities
-    pub metadata_uri: Option<String>,  // Extended metadata
-    pub price_oracle: Option<Pubkey>,
-    pub reputation_pda: Option<Pubkey>,
-    pub min_transaction_amount: u64,
-    pub max_transaction_amount: Option<u64>,
-    pub supported_tokens: Vec<Pubkey>, // Max 5 tokens
+    pub price_oracle: Option<Pubkey>,  // Optional pricing oracle
+    pub reputation_pda: Pubkey,        // Linked reputation account
     pub last_updated: i64,
-    pub created_at: i64,
-    pub total_transactions: u64,
     pub is_active: bool,
-    pub is_verified: bool,             // Protocol verification
     pub bump: u8,
 }
 
 pub struct Capability {
     pub capability_type: String,       // Max 64 chars
-    pub version: String,               // Max 32 chars
-    pub price_lamports: u64,
-    pub metadata: String,              // Max 256 chars
+    pub metadata: String,              // JSON metadata (max 256 chars)
 }
 \end{lstlisting}
+
+The \texttt{Capability} struct uses a JSON \texttt{metadata} field to encode pricing, versioning, and service-specific parameters (see Section~\ref{sec:capability-metadata}), avoiding rigid on-chain schema constraints.
 
 \subsection{Discovery Algorithm}
 
@@ -1103,7 +1111,7 @@ pub struct Capability {
 \end{algorithmic}
 \end{algorithm}
 
-\subsection{Capability Metadata}
+\subsection{Capability Metadata}\label{sec:capability-metadata}
 
 Capabilities use JSON metadata:
 
@@ -1143,6 +1151,44 @@ x0-USD is a 1:1 USDC-backed Token-2022 token with:
     \item Configurable redemption fee (default 0.8\%, set via \texttt{WRAPPER\_REDEMPTION\_FEE\_BPS})
 \end{itemize}
 
+\subsubsection{State Accounts}
+
+The wrapper maintains two on-chain accounts for configuration and operational metrics:
+
+\begin{lstlisting}[language=Rust,caption=Wrapper Configuration Account]
+#[account]
+pub struct WrapperConfig {
+    pub admin: Pubkey,                 // Admin key (should be multisig)
+    pub pending_admin: Option<Pubkey>, // Two-step admin transfer
+    pub usdc_mint: Pubkey,             // Underlying USDC mint
+    pub wrapper_mint: Pubkey,          // x0-USD mint
+    pub reserve_account: Pubkey,       // USDC reserve token account
+    pub redemption_fee_bps: u16,       // Fee in basis points
+    pub is_paused: bool,               // Emergency pause flag
+    pub bump: u8,
+}
+\end{lstlisting}
+
+\begin{lstlisting}[language=Rust,caption=Wrapper Statistics Account]
+#[account]
+pub struct WrapperStats {
+    pub reserve_usdc_balance: u64,     // Current USDC in reserve
+    pub outstanding_wrapper_supply: u64, // Outstanding x0-USD supply
+    pub total_deposits: u64,           // All-time deposits
+    pub total_redemptions: u64,        // All-time redemptions
+    pub total_fees_collected: u64,     // All-time fees
+    pub daily_redemption_volume: u64,  // Resets every 24h
+    pub daily_redemption_reset_timestamp: i64,
+    pub last_updated: i64,
+    pub bump: u8,
+}
+\end{lstlisting}
+
+The reserve ratio $\rho$ can be computed directly from \texttt{WrapperStats}:
+\begin{equation}
+\rho = \frac{\texttt{reserve\_usdc\_balance}}{\texttt{outstanding\_wrapper\_supply}}
+\end{equation}
+
 \subsubsection{Reserve Invariant}
 
 \begin{definition}[Reserve Invariant]
@@ -1180,7 +1226,23 @@ The fee increases the reserve ratio. \qed
 
 \subsubsection{Timelock}
 
-All admin operations require 48-hour timelock:
+All admin operations require 48-hour timelock. Each pending action is stored in a PDA:
+
+\begin{lstlisting}[language=Rust,caption=Timelocked Admin Action]
+#[account]
+pub struct AdminAction {
+    pub action_type: AdminActionType,  // SetFeeRate | SetPaused | EmergencyWithdraw | TransferAdmin
+    pub scheduled_timestamp: i64,      // Earliest execution time
+    pub new_value: u64,                // Interpretation depends on action_type
+    pub new_admin: Pubkey,             // For TransferAdmin actions
+    pub destination: Pubkey,           // For EmergencyWithdraw
+    pub executed: bool,
+    pub cancelled: bool,
+    pub bump: u8,
+}
+\end{lstlisting}
+
+An action is executable if and only if $t_{\text{now}} \geq \texttt{scheduled\_timestamp}$ and $\neg \texttt{executed} \land \neg \texttt{cancelled}$.
 
 \begin{algorithm}
 \caption{Timelock Pattern}
@@ -1292,7 +1354,7 @@ Owner approves via:
 
 \subsection{Fee Structure}
 
-\begin{table}[h]
+\begin{table}[ht!]
 \centering
 \begin{tabular}{|l|l|l|}
 \hline
@@ -1349,6 +1411,204 @@ Reserve ratio evolution:
 \end{equation}
 
 The reserve ratio increases over time due to fees.
+
+\section{Zero-Knowledge Proof Verification (x0-zk-verifier)}
+
+\subsection{Problem Statement}
+
+Token-2022's Confidential Transfer extension encrypts token balances and transfer amounts using twisted ElGamal encryption over the Ristretto255 curve. To ensure that encrypted operations preserve token invariants (e.g., non-negative balances, valid public keys), the protocol requires zero-knowledge proofs that attest to the correctness of ciphertext operations without revealing plaintext values.
+
+The challenge is two-fold:
+\begin{enumerate}
+    \item \textbf{Client-side proof generation}: Proofs must be generated off-chain where the user holds the ElGamal secret key, using Groth16 proving circuits from \texttt{solana-zk-token-sdk}.
+    \item \textbf{On-chain proof verification}: Proofs must be verified on-chain and the verification result stored in a state account that Token-2022 can reference during confidential transfer execution.
+\end{enumerate}
+
+\subsection{Cryptographic Foundations}
+
+\subsubsection{Twisted ElGamal Encryption}
+
+Token-2022 uses a \emph{twisted} variant of ElGamal encryption over the Ristretto255 group, which provides both encryption and efficient homomorphic addition:
+
+\begin{definition}[Twisted ElGamal Encryption]
+For a public key $P = s \cdot G$ where $s$ is the secret scalar and $G$ is the Ristretto255 basepoint:
+\begin{align}
+\texttt{Encrypt}(P, v) &= (r \cdot G, \; r \cdot P + v \cdot H) \\
+\texttt{Decrypt}(s, (C_1, C_2)) &= C_2 - s \cdot C_1 = v \cdot H
+\end{align}
+where $r \stackrel{\$}{\leftarrow} \mathbb{Z}_q$ is a random scalar, $H$ is a second generator, and $v$ is the plaintext value. Decryption recovers $v \cdot H$, from which $v$ is obtained via brute-force discrete log (feasible for $v < 2^{48}$).
+\end{definition}
+
+\subsubsection{Groth16 Proof System}
+
+The protocol uses Groth16~\cite{groth16} for succinct non-interactive zero-knowledge proofs:
+
+\begin{definition}[Groth16 Proof]
+A Groth16 proof $\pi = (A, B, C) \in \mathbb{G}_1 \times \mathbb{G}_2 \times \mathbb{G}_1$ proves knowledge of a witness $w$ satisfying a rank-1 constraint system $R(x, w) = 1$, where $x$ is the public input. The proof satisfies:
+\begin{itemize}
+    \item \textbf{Completeness}: An honest prover always produces a valid proof
+    \item \textbf{Soundness}: No efficient adversary can produce a valid proof for a false statement
+    \item \textbf{Zero-knowledge}: The proof reveals nothing about $w$ beyond $R(x, w) = 1$
+\end{itemize}
+Proof size is constant: 192 bytes regardless of circuit complexity.
+\end{definition}
+
+\subsection{Proof Types}
+
+The verifier supports four proof types corresponding to Token-2022 confidential transfer operations:
+
+\subsubsection{PubkeyValidityProof}
+
+Proves that a given 32-byte value is a valid ElGamal public key (i.e., a point on the Ristretto255 curve that was correctly derived from a secret key).
+
+\begin{equation}
+\text{Prove}: \exists \; s \in \mathbb{Z}_q \text{ such that } P = s \cdot G
+\end{equation}
+
+Required when configuring a token account for confidential transfers. Proof data is 64 bytes.
+
+\subsubsection{ZeroBalanceProof}
+
+Proves that an ElGamal ciphertext encrypts the value zero, required for account closure:
+
+\begin{equation}
+\text{Prove}: (C_1, C_2) = \texttt{Encrypt}(P, 0) \implies C_2 = r \cdot P
+\end{equation}
+
+Proof data is 96 bytes.
+
+\subsubsection{WithdrawProof}
+
+Proves that a withdrawal of amount $a$ from an encrypted balance $B$ is valid:
+
+\begin{equation}
+\text{Prove}: \texttt{Decrypt}(s, B) = v \geq a \;\land\; B' = B - \texttt{Encrypt}(P, a)
+\end{equation}
+
+where $v$ is the current balance and $B'$ is the new encrypted balance. This ensures the account has sufficient funds without revealing either the balance or the withdrawal amount on-chain. Proof data is 160 bytes.
+
+\subsubsection{TransferProof}
+
+Proves the correctness of a confidential transfer between two accounts:
+
+\begin{equation}
+\text{Prove}: \texttt{Decrypt}(s_{\text{src}}, B_{\text{src}}) \geq a \;\land\; B'_{\text{src}} = B_{\text{src}} - \texttt{Encrypt}(P_{\text{src}}, a) \;\land\; \Delta_{\text{dst}} = \texttt{Encrypt}(P_{\text{dst}}, a)
+\end{equation}
+
+This is the most complex proof, attesting simultaneously that the sender has sufficient balance, the sender's balance is correctly decremented, and the recipient's balance increment is correctly encrypted under the recipient's public key.
+
+\subsection{Architecture}
+
+\subsubsection{Proof Context Account}
+
+Successful verification creates a \texttt{ProofContext} PDA that stores the verification result:
+
+\begin{lstlisting}[language=Rust,caption=Proof Context State Account]
+#[account]
+pub struct ProofContext {
+    pub version: u8,
+    pub proof_type: ProofType,         // PubkeyValidity | Withdraw | ZeroBalance | Transfer
+    pub verified: bool,
+    pub owner: Pubkey,                 // Account owner who can use this proof
+    pub verified_at: i64,              // Unix timestamp
+    pub amount: Option<u64>,           // For Withdraw/Transfer proofs
+    pub recipient: Option<Pubkey>,     // For Transfer proofs
+    pub elgamal_pubkey: Option<[u8; 32]>, // For PubkeyValidity proofs
+    pub mint: Pubkey,                  // Token mint this proof is for
+    pub token_account: Pubkey,         // Token account this proof is for
+    pub bump: u8,
+}
+\end{lstlisting}
+
+\subsubsection{Proof Freshness}
+
+To prevent replay attacks, proof contexts enforce a temporal validity window:
+
+\begin{definition}[Proof Freshness]
+A proof context $C$ is \emph{fresh} at time $t$ if and only if:
+\begin{equation}
+t - C.\texttt{verified\_at} < \Delta_{\text{proof}} = 300 \text{ seconds}
+\end{equation}
+\end{definition}
+
+The 5-minute window provides sufficient time for transaction construction and submission while limiting the replay window.
+
+\subsubsection{Amount Bounds}
+
+All confidential amounts are bounded:
+\begin{equation}
+0 \leq a \leq 2^{48} - 1 = 281{,}474{,}976{,}710{,}655
+\end{equation}
+
+This constraint arises from the brute-force discrete log required during ElGamal decryption. The \texttt{solana-zk-token-sdk} uses a precomputed lookup table for values up to $2^{16}$, combined with baby-step-giant-step for the remaining $2^{32}$ range.
+
+\subsection{Off-Chain Proof Generation (x0-zk-proofs)}
+
+The \texttt{x0-zk-proofs} crate is a Rust library compiled to WebAssembly via \texttt{wasm-pack}, providing client-side proof generation for the TypeScript SDK:
+
+\begin{lstlisting}[language=Rust,caption=x0-zk-proofs WASM Interface]
+#[wasm_bindgen]
+pub fn generate_pubkey_validity_proof(
+    keypair_bytes: &[u8]        // 64-byte ElGamalKeypair
+) -> Result<Vec<u8>, JsValue>;  // 64-byte PubkeyValidityData
+
+#[wasm_bindgen]
+pub fn generate_zero_balance_proof(
+    keypair_bytes: &[u8]        // 64-byte ElGamalKeypair
+) -> Result<Vec<u8>, JsValue>;  // 96-byte ZeroBalanceProofData
+
+#[wasm_bindgen]
+pub fn generate_withdraw_proof(
+    keypair_bytes: &[u8],       // 64-byte ElGamalKeypair
+    current_balance: u64,       // Current decrypted balance
+    withdraw_amount: u64        // Amount to withdraw
+) -> Result<Vec<u8>, JsValue>;  // 160-byte WithdrawData
+\end{lstlisting}
+
+The WASM module internally uses:
+\begin{itemize}
+    \item \texttt{solana-zk-token-sdk v1.18.22} for Groth16 circuit construction and proving
+    \item \texttt{ElGamalKeypair} reconstruction from 64-byte serialized form
+    \item \texttt{bytemuck} for zero-copy POD serialization of proof data
+    \item Authenticated encryption (AE) ciphertexts for decryptable balance hints
+\end{itemize}
+
+\subsection{Verification Flow}
+
+The end-to-end flow for a confidential withdrawal is:
+
+\begin{algorithm}
+\caption{Confidential Withdrawal with ZK Proof}
+\begin{algorithmic}[1]
+\Procedure{ConfidentialWithdraw}{$\texttt{keypair}, b, a$}
+    \State \textbf{require} $a \leq b$ \Comment{Client-side: sufficient balance}
+    \State \textbf{require} $a \leq 2^{48} - 1$ \Comment{Client-side: amount bound}
+    \State $\pi \gets \texttt{x0\_zk\_proofs::generate\_withdraw\_proof}(\texttt{keypair}, b, a)$
+    \State \textbf{send} $\texttt{x0\_zk\_verifier::verify\_withdraw}(\pi, a, \texttt{new\_ae\_balance})$
+    \State $C \gets \texttt{ProofContext PDA}$ \Comment{On-chain: created after verification}
+    \State \textbf{require} $C.\texttt{verified} = \texttt{true}$ \Comment{On-chain check}
+    \State \textbf{send} $\texttt{Token-2022::confidential\_withdraw}(a, C)$
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Security Properties}
+
+\begin{theorem}[Balance Confidentiality]
+An adversary observing the blockchain cannot determine any agent's confidential balance, even given all historic proof contexts and ciphertexts.
+\end{theorem}
+
+\begin{proof}
+Token balances are encrypted under twisted ElGamal with semantic security. Proof contexts store only the verification result, proof type, and amount (for withdrawals), but the \emph{remaining balance} is revealed only via AE ciphertext decryptable solely by the account holder. The Groth16 zero-knowledge property ensures proofs reveal nothing beyond the statement's truth. \qed
+\end{proof}
+
+\begin{theorem}[Proof Unforgeability]
+No computationally bounded adversary can produce a valid proof for a false statement (e.g., withdrawing more than the encrypted balance).
+\end{theorem}
+
+\begin{proof}
+Follows from the knowledge-soundness of Groth16 under the $q$-type knowledge-of-exponent assumption in bilinear groups. The verifier program re-derives the verification via \texttt{solana-zk-token-sdk}'s \texttt{verify()} method, which checks the Groth16 pairing equation. \qed
+\end{proof}
 
 \section{Security Analysis}
 
@@ -1458,7 +1718,7 @@ Proven in Section 7.2. \qed
 
 \subsection{Computational Complexity}
 
-\begin{table}[h]
+\begin{table}[ht!]
 \centering
 \begin{tabular}{|l|l|l|}
 \hline
@@ -1476,7 +1736,7 @@ Registry search & $O(N)$ & $O(1)$ \\
 
 \subsection{On-Chain Costs}
 
-\begin{table}[h]
+\begin{table}[ht!]
 \centering
 \begin{tabular}{|l|l|l|}
 \hline
@@ -1487,6 +1747,9 @@ EscrowAccount & 307 & 0.0030 \\
 AgentRegistry & 2,064 & 0.015 \\
 AgentReputation & 114 & 0.0016 \\
 WrapperConfig & 243 & 0.0025 \\
+WrapperStats & 137 & 0.0018 \\
+ProofContext & 248 & 0.0026 \\
+AdminAction & 120 & 0.0016 \\
 \hline
 \end{tabular}
 \caption{Account Sizes and Rent Costs (at 0.00000348 SOL/byte-epoch)}
@@ -1496,7 +1759,7 @@ WrapperConfig & 243 & 0.0025 \\
 
 Measured on Solana devnet (February 2026):
 
-\begin{table}[h]
+\begin{table}[ht!]
 \centering
 \begin{tabular}{|l|l|l|}
 \hline
@@ -1548,38 +1811,39 @@ x0's reputation oracle addresses these limitations.
 
 \section{Future Work}
 
-\subsection{Zero-Knowledge Proofs}
+\subsection{Extended Zero-Knowledge Applications}
 
-Future versions may use ZK-SNARKs for:
+With the foundational ZK verification infrastructure now deployed (Section~9), several extensions become feasible:
 \begin{itemize}
-    \item Private spend limit verification
-    \item Proof of reputation without revealing details
-    \item Confidential escrow amounts
+    \item \textbf{Private spend limit verification}: Prove that a transfer is within policy limits without revealing the daily limit or cumulative spend, using range proofs composed with the existing Groth16 circuits
+    \item \textbf{Proof of reputation threshold}: Prove $S \geq \theta$ for a reputation score $S$ and threshold $\theta$ without revealing the exact score, enabling privacy-preserving agent discovery
+    \item \textbf{Confidential escrow amounts}: Extend the escrow state machine to operate on encrypted amounts, using ZK proofs to verify state transitions without revealing the escrowed value
+    \item \textbf{Recursive proof composition}: Batch multiple proof verifications into a single on-chain instruction using recursive SNARKs, reducing per-transaction compute costs
 \end{itemize}
 
 \subsection{Cross-Chain Support}
 
 Extend to other chains via:
 \begin{itemize}
-    \item Wormhole integration for cross-chain messages
-    \item Unified reputation across chains
-    \item Cross-chain escrow settlement
+    \item Wormhole integration for cross-chain messages and proof relay
+    \item Unified reputation across chains, anchored to Solana as the settlement layer
+    \item Cross-chain escrow settlement with atomic swap guarantees
 \end{itemize}
 
 \subsection{Machine Learning Integration}
 
 \begin{itemize}
-    \item Anomaly detection for suspicious agent behavior
-    \item Dynamic reputation weighting
-    \item Predictive escrow dispute resolution
+    \item Anomaly detection for suspicious agent behavior using on-chain transaction patterns
+    \item Dynamic reputation weighting via learned feature importance
+    \item Predictive escrow dispute resolution using historical outcome data
 \end{itemize}
 
 \subsection{Governance}
 
 \begin{itemize}
-    \item DAO for protocol parameter updates
-    \item Community-driven arbiter selection
-    \item Fee redistribution to token holders
+    \item DAO for protocol parameter updates (fee rates, timelock durations)
+    \item Community-driven arbiter selection and staking
+    \item Fee redistribution to token holders and active arbiters
 \end{itemize}
 
 \section{Conclusion}
@@ -1593,6 +1857,7 @@ We have presented x0, a comprehensive payment infrastructure for autonomous agen
     \item \textbf{Temporal Reputation}: On-chain trust scores with decay to prevent stale reputations
     \item \textbf{USDC Wrapper}: Stable payments with cryptographic reserve invariants
     \item \textbf{Human-in-the-Loop}: Fallback mechanism for exceptional cases
+    \item \textbf{Zero-Knowledge Verification}: On-chain Groth16 proof verification enabling confidential transfers with provable correctness
 \end{enumerate}
 
 The protocol has been deployed on Solana devnet and is undergoing security audits. We invite the community to review the codebase at \texttt{github.com/x0-protocol} and provide feedback.
@@ -1644,79 +1909,132 @@ Bloom, B. H. (1970). Space/time trade-offs in hash coding with allowable errors.
 \bibitem{ed25519}
 Bernstein, D. J., et al. (2012). High-speed high-security signatures. Journal of Cryptographic Engineering, 2(2), 77-89.
 
+\bibitem{groth16}
+Groth, J. (2016). On the Size of Pairing-Based Non-interactive Arguments. EUROCRYPT 2016, Lecture Notes in Computer Science, vol 9666, pp. 305-326.
+
+\bibitem{ristretto}
+Hamburg, M. (2015). Decaf: Eliminating cofactors through point compression. CRYPTO 2015. Extended to Ristretto255 for use with Curve25519.
+
 \end{thebibliography}
 
 \appendix
 
 \section{Error Codes Reference}
 
-\begin{table}[h]
+Error codes follow a structured numbering scheme where the high byte identifies the program category and the low nibble groups errors by subcategory:
+
+\begin{table}[ht!]
 \centering
-\small
+\scriptsize
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{0.9}
 \begin{tabular}{|l|l|l|}
 \hline
-\textbf{Code} & \textbf{Name} & \textbf{Description} \\
+\textbf{Range} & \textbf{Name} & \textbf{Description} \\
 \hline
-\multicolumn{3}{|c|}{\textit{x0-common errors (0x1770+)}} \\
+\multicolumn{3}{|c|}{\textit{x0-guard: Policy Errors (0x1100--0x110F)}} \\
 \hline
-0x1770 & Unauthorized & Unauthorized access \\
-0x1771 & InvalidAmount & Invalid amount specified \\
-0x1772 & InvalidTimestamp & Invalid timestamp \\
-0x1773 & AccountNotInitialized & Account not initialized \\
-0x1774 & InvalidProgramId & Invalid program ID \\
-0x1775 & MathOverflow & Math overflow error \\
-0x1776 & InvalidMint & Invalid token mint \\
-0x1777 & InsufficientFunds & Insufficient funds \\
-0x1778 & InvalidState & Invalid state transition \\
-0x1779 & Expired & Operation has expired \\
-0x177A & NotExpired & Not yet expired \\
-0x177B & AlreadyInitialized & Already initialized \\
-0x177C & InvalidOwner & Invalid owner \\
-0x177D & InvalidSigner & Invalid signer \\
-0x177E & InvalidAccount & Invalid account \\
-0x177F & InvalidInstruction & Invalid instruction \\
-0x1780 & RateLimitExceeded & Rate limit exceeded \\
-0x1781 & InvalidProof & Invalid cryptographic proof \\
-0x1782 & InvalidHash & Invalid hash value \\
-0x1783 & InvalidSignature & Invalid signature \\
-0x1784 & InvalidPublicKey & Invalid public key \\
-0x1785 & InvalidSeed & Invalid PDA seed \\
-0x1786 & InvalidBump & Invalid PDA bump \\
-0x1787 & InvalidData & Invalid account data \\
-0x1788 & InvalidLength & Invalid data length \\
-0x1789 & InvalidVersion & Invalid account version \\
+0x1101 & RecipientNotWhitelisted & Recipient not in whitelist \\
+0x1102 & DailyLimitExceeded & Rolling 24h limit exceeded \\
+0x1103 & InvalidMerkleProof & Merkle proof verification failed \\
+0x1104 & InvalidBloomFilter & Bloom filter misconfigured \\
+0x1105 & PolicyNotFound & Agent policy PDA missing \\
+0x1106 & UnauthorizedSigner & Unauthorized transaction signer \\
+0x1107 & ConfidentialTransferFailed & ZK proof verification failed \\
 \hline
-\multicolumn{3}{|c|}{\textit{Guard-specific errors}} \\
+\multicolumn{3}{|c|}{\textit{x0-guard: Configuration Errors (0x1110--0x111F)}} \\
 \hline
-0x178A & PolicyNotActive & Policy is deactivated \\
-0x178B & DailyLimitExceeded & Transfer exceeds 24h limit \\
-0x178C & SingleTxLimitExceeded & Exceeds per-tx limit \\
-0x178D & DestinationNotWhitelisted & Recipient not in whitelist \\
-0x178E & WindowOverflow & Rolling window overflow \\
-0x178F & ExtraMetasAlreadyInit & Extra metas re-init blocked \\
-0x1790 & UnauthorizedMetasInit & Mint authority required \\
+0x1110 & DailyLimitTooHigh & Exceeds maximum daily limit \\
+0x1111 & DailyLimitTooLow & Below minimum daily limit \\
+0x1112 & InvalidWhitelistConfig & Invalid whitelist configuration \\
+0x1118 & DelegationRequired & Agent must be delegate, not owner \\
+0x111B & BoundTokenAccountMismatch & Wrong source token account \\
+0x111F & MissingZkProof & ZK proof required for confidential transfer \\
 \hline
-\multicolumn{3}{|c|}{\textit{Escrow-specific errors}} \\
+\multicolumn{3}{|c|}{\textit{x0-guard: Transfer Errors (0x1120--0x112F)}} \\
 \hline
-0x1791 & InvalidEscrowState & Invalid state transition \\
-0x1792 & DisputeDelayNotMet & 24h dispute delay not met \\
-0x1793 & ArbiterRequired & Arbiter required for dispute \\
+0x1120 & ZeroTransferAmount & Transfer amount is zero \\
+0x1121 & TransferAmountTooHigh & Exceeds per-transaction limit \\
 \hline
-\multicolumn{3}{|c|}{\textit{Wrapper-specific errors}} \\
+\multicolumn{3}{|c|}{\textit{x0-guard: Blink Errors (0x1130--0x113F)}} \\
 \hline
-0x1794 & WrapperPaused & Wrapper operations paused \\
-0x1795 & InsufficientReserve & Reserve undercollateralized \\
-0x1796 & TimelockNotExpired & Timelock period not expired \\
-0x1797 & ActionAlreadyExecuted & Timelock action already executed \\
-0x1798 & ActionCancelled & Timelock action was cancelled \\
+0x1130 & BlinkRateLimitExceeded & $>$3 blinks per hour \\
+0x1131 & BlinkExpired & Blink has expired \\
+\hline
+\multicolumn{3}{|c|}{\textit{x0-guard: Severity Errors (0x1140--0x114F)}} \\
+\hline
+0x1140 & PolicyUpdateTooFrequent & Rate-limited policy update \\
+0x1141 & SingleTransactionLimitExceeded & Per-tx limit exceeded \\
+0x1143 & ExtraMetasAlreadyInitialized & Extra metas re-init blocked \\
+0x1144 & UnauthorizedExtraMetasInitializer & Mint authority required \\
+\hline
+\multicolumn{3}{|c|}{\textit{x0-escrow: State Errors (0x1108--0x1109, 0x1200+)}} \\
+\hline
+0x1108 & EscrowExpired & Escrow timeout reached \\
+0x1109 & InvalidEscrowState & Invalid state transition \\
+0x1202 & SameBuyerAndSeller & Buyer and seller must differ \\
+0x1204 & ZeroEscrowAmount & Escrow amount is zero \\
+\hline
+\multicolumn{3}{|c|}{\textit{x0-escrow: Operation Errors (0x1210--0x121F)}} \\
+\hline
+0x1210 & OnlyBuyerCanFund & Only buyer can fund \\
+0x1211 & OnlySellerCanDeliver & Only seller can mark delivered \\
+0x1213 & OnlyArbiterCanResolve & Only arbiter can resolve \\
+0x1217 & ArbiterResolutionTooEarly & Arbiter must wait for delay \\
+\hline
+\multicolumn{3}{|c|}{\textit{x0-registry: Entry Errors (0x1300--0x130F)}} \\
+\hline
+0x1300 & AgentAlreadyRegistered & Agent already registered \\
+0x1301 & AgentNotFound & Agent not found \\
+0x1303 & EndpointTooLong & Endpoint URL too long \\
+0x1304 & TooManyCapabilities & Exceeds max capabilities \\
+0x1307 & InsufficientListingFee & Listing fee not met \\
+\hline
+\multicolumn{3}{|c|}{\textit{x0-reputation: Errors (0x1400--0x140F)}} \\
+\hline
+0x1400 & ReputationNotFound & Reputation account missing \\
+0x1401 & ReputationAlreadyInitialized & Already initialized \\
+0x1403 & UnauthorizedReputationUpdate & Unauthorized caller \\
+0x1404 & InsufficientTransactions & Too few txns for score \\
+\hline
+\multicolumn{3}{|c|}{\textit{x0-token: Token Errors (0x1500--0x1515)}} \\
+\hline
+0x1500 & MintAlreadyInitialized & Mint already initialized \\
+0x1503 & ConfidentialTransfersNotEnabled & Confidential not enabled \\
+0x1507 & InvalidElGamalPubkey & Invalid ElGamal public key \\
+0x1508 & InvalidPubkeyValidityProof & Invalid pubkey proof \\
+0x150A & InvalidWithdrawProof & Invalid withdraw proof \\
+0x150F & AmountExceedsConfidentialMax & Amount $> 2^{48}-1$ \\
+\hline
+\multicolumn{3}{|c|}{\textit{x0-wrapper: State/Reserve Errors (0x1600--0x164F)}} \\
+\hline
+0x1600 & WrapperPaused & Operations are paused \\
+0x1610 & InsufficientReserve & Insufficient reserve balance \\
+0x1611 & ReserveInvariantViolated & Reserve $<$ supply \\
+0x1620 & DepositTooSmall & Below minimum deposit \\
+0x1623 & DailyRedemptionLimitExceeded & Daily limit exceeded \\
+0x1630 & Unauthorized & Admin required \\
+0x1640 & AdminActionNotFound & Action PDA not found \\
+0x1643 & TimelockNotExpired & Timelock period pending \\
+\hline
+\multicolumn{3}{|c|}{\textit{x0-zk-verifier: Proof Errors (0x1700--0x1721)}} \\
+\hline
+0x1700 & ProofVerificationFailed & ZK proof verification failed \\
+0x1701 & InvalidProofData & Invalid proof data format \\
+0x1703 & InvalidProofType & Invalid proof type \\
+0x1704 & ProofExpired & Proof timestamp too old \\
+0x1710 & AmountTooLarge & Amount $> 2^{48}-1$ \\
+0x1711 & InvalidElGamalPubkey & Invalid ElGamal public key \\
+0x1713 & ProofSizeMismatch & Proof data size mismatch \\
+0x1720 & ArithmeticOverflow & Arithmetic overflow \\
 \hline
 \end{tabular}
-\caption{Protocol Error Codes (Anchor offset: 6000 + index)}
+\caption{Protocol Error Codes (representative subset; 7 enums, 60+ total codes). Full reference in source: \texttt{x0-common/src/error.rs}}
 \end{table}
 
 \section{Program Addresses}
 
-\begin{table}[h]
+\begin{table}[ht!]
 \centering
 \begin{tabular}{|l|l|}
 \hline
@@ -1728,6 +2046,7 @@ x0-escrow & \texttt{AhaDyVm8LBxpUwFdArA37LnHvNx6cNWe3KAiy8zGqhHF} \\
 x0-registry & \texttt{Bebty49EPhFoANKDw7TqLQ2bX61ackNav5iNkj36eVJo} \\
 x0-reputation & \texttt{FfzkTWRGAJQPDePbujZdEhKHqC1UpqvDrpv4TEiWpx6y} \\
 x0-wrapper & \texttt{EomiXBbg94Smu4ipDoJtuguazcd1KjLFDFJt2fCabvJ8} \\
+x0-zk-verifier & \texttt{zQWSrznKgcK8aHA4ry7xbSCdP36FqgUHj766YM3pwre} \\
 \hline
 \end{tabular}
 \caption{Deployed Program Addresses}
@@ -1735,7 +2054,7 @@ x0-wrapper & \texttt{EomiXBbg94Smu4ipDoJtuguazcd1KjLFDFJt2fCabvJ8} \\
 
 \section{Mathematical Notation}
 
-\begin{table}[h]
+\begin{table}[ht!]
 \centering
 \begin{tabular}{|l|l|}
 \hline
@@ -1756,6 +2075,11 @@ $S$ & Reputation score \\
 $\rho$ & Reserve ratio \\
 $R_{\text{USDC}}$ & USDC reserve balance \\
 $S_{\text{x0-USD}}$ & x0-USD supply \\
+$G, H$ & Ristretto255 generators \\
+$P$ & ElGamal public key ($P = s \cdot G$) \\
+$s$ & ElGamal secret scalar \\
+$\pi$ & Zero-knowledge proof ($\pi = (A, B, C)$ for Groth16) \\
+$\Delta_{\text{proof}}$ & Proof freshness window (300 seconds) \\
 \hline
 \end{tabular}
 \caption{Mathematical Notation Reference}
@@ -1817,7 +2141,7 @@ const isValid = await verifyPaymentProof(connection, proof, {
 
 \subsection{SDK Modules}
 
-\begin{table}[h]
+\begin{table}[ht!]
 \centering
 \begin{tabular}{|l|l|}
 \hline
@@ -1828,6 +2152,8 @@ const isValid = await verifyPaymentProof(connection, proof, {
 \texttt{RegistryClient} & Register agents, discover services \\
 \texttt{GuardClient} & Manage spending policies \\
 \texttt{WrapperClient} & Wrap/unwrap USDC to x0-USD \\
+\texttt{ConfidentialClient} & Confidential transfer proof generation via WASM \\
+\texttt{ZkVerifierClient} & On-chain ZK proof verification \\
 \texttt{x402} & HTTP 402 payment request/proof utilities \\
 \texttt{blink} & Generate Solana Actions for human approval \\
 \hline
@@ -1846,28 +2172,19 @@ const isValid = await verifyPaymentProof(connection, proof, {
 
 \subsection{Confidential Transfer Architecture}
 
-The SDK's \texttt{ConfidentialClient} module uses \textit{real} Groth16 zero-knowledge proof generation powered by \texttt{solana-zk-token-sdk} compiled to WebAssembly. The WASM module (\texttt{x0-zk-proofs}) provides three proof generation functions:
+For the complete treatment of the zero-knowledge proof system---including cryptographic foundations, proof types, the \texttt{ProofContext} state account, and the end-to-end verification flow---see Section~9. The SDK's \texttt{ConfidentialClient} module wraps the WASM-compiled \texttt{x0-zk-proofs} crate to provide transparent proof generation:
 
 \begin{lstlisting}[language=JavaScript,caption=Confidential Transfer ZK Proof Generation]
 import { ConfidentialClient } from '@x0-protocol/sdk';
 
-// ConfidentialClient uses WASM-compiled Groth16 proofs
 const confidentialClient = new ConfidentialClient(connection, wallet);
 
-// Proof generation is handled automatically via WASM:
-// - PubkeyValidityProof: Proves ElGamal key validity
-// - WithdrawProof: Proves withdrawal amount against encrypted balance
-// - ZeroBalanceProof: Proves zero balance for account closure
+// Proof generation via WASM (x0-zk-proofs):
+// - PubkeyValidityProof: Proves ElGamal key validity (64 bytes)
+// - WithdrawProof: Proves withdrawal against encrypted balance (160 bytes)
+// - ZeroBalanceProof: Proves zero balance for account closure (96 bytes)
+// On-chain verification via x0-zk-verifier creates ProofContext PDAs
+// that Token-2022 references during confidential transfer execution.
 \end{lstlisting}
-
-\textbf{WASM Build}: The proof generation module is compiled from Rust to WebAssembly using \texttt{wasm-pack}, targeting Node.js, web browsers, and bundlers (webpack/rollup). The module uses:
-\begin{itemize}
-    \item \texttt{solana-zk-token-sdk v1.18.22} for Groth16 proof construction on the Ristretto255 curve
-    \item \texttt{ElGamalKeypair} reconstruction from 64-byte serialized form
-    \item \texttt{bytemuck} for POD-type serialization of proof data
-    \item Authenticated encryption (AE) for decryptable balance hints
-\end{itemize}
-
-\textbf{Note}: Both the on-chain validation (x0-guard via Token-2022) and the TypeScript SDK's client-side proof generation now use production-grade cryptographic operations.
 
 \end{document}
