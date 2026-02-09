@@ -30,11 +30,16 @@ pub struct WrapperConfig {
     /// Whether deposits and redemptions are paused
     pub is_paused: bool,
 
+    /// Authorized bridge program (for bridge_mint CPI)
+    /// Set via set_bridge_program admin instruction.
+    /// When Pubkey::default(), bridge minting is disabled.
+    pub bridge_program: Pubkey,
+
     /// PDA bump seed
     pub bump: u8,
 
     /// Reserved space for future upgrades
-    pub _reserved: [u8; 64],
+    pub _reserved: [u8; 32],
 }
 
 impl WrapperConfig {

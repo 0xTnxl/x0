@@ -9,6 +9,7 @@ members = [
     "programs/x0-wrapper",
     "programs/x0-zk-proofs",
     "programs/x0-zk-verifier",
+    "programs/x0-bridge",
 ]
 resolver = "2"
 
@@ -34,6 +35,7 @@ spl-tlv-account-resolution = "=0.6.5"
 # Cryptography
 sha2 = "0.10"
 bytemuck = { version = "1.14", features = ["derive"] }
+hex = "0.4"
 
 # Fix for constant_time_eq edition 2024 issue (blake3 1.6.x uses 0.3.x)
 blake3 = "=1.5.5"

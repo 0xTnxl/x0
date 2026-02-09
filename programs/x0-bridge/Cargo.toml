@@ -1,0 +1,36 @@
+[package]
+name = "x0-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+description = "Cross-chain bridge receiver: Base → Solana via Hyperlane + SP1 STARK proofs"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "x0_bridge"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+idl-build = ["anchor-lang/idl-build"]
+default = []
+
+[dependencies]
+anchor-lang.workspace = true
+anchor-spl.workspace = true
+solana-program.workspace = true
+x0-common = { path = "../x0-common" }
+x0-wrapper = { path = "../x0-wrapper", features = ["cpi"] }
+borsh.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+solana-program-test.workspace = true
+solana-sdk.workspace = true
+tokio.workspace = true

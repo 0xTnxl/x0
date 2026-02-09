@@ -345,14 +345,15 @@ pub const WRAPPER_DECIMALS: u8 = 6;
 /// Wrapper Config account size
 pub const WRAPPER_CONFIG_SIZE: usize = 8 + // discriminator
     32 + // admin (multisig)
-    32 + // pending_admin
+    33 + // pending_admin (Option<Pubkey>)
     32 + // usdc_mint
     32 + // wrapper_mint
     32 + // reserve_account
     2 +  // redemption_fee_bps
     1 +  // is_paused
+    32 + // bridge_program
     1 +  // bump
-    64;  // reserved
+    32;  // reserved
 
 /// Wrapper Stats account size
 pub const WRAPPER_STATS_SIZE: usize = 8 + // discriminator
@@ -430,3 +431,144 @@ pub const CONFIDENTIAL_ACCOUNT_EXTENSION_SIZE: usize =
     8 +  // maximum_pending_balance_credit_counter
     8 +  // expected_pending_balance_credit_counter
     8;   // actual_pending_balance_credit_counter
+
+// ============================================================================
+// Cross-Chain Bridge Configuration (Base → Solana via Hyperlane + SP1)
+// ============================================================================
+
+/// x0-bridge program ID
+pub const BRIDGE_PROGRAM_ID: Pubkey = pubkey!("4FuyKfQysHxcTeNJtz5rBzzS8kmjn2DdkgXH1Q7edXa7");
+
+/// Seed prefix for BridgeConfig PDA
+pub const BRIDGE_CONFIG_SEED: &[u8] = b"bridge_config";
+
+/// Seed prefix for BridgeMessage PDA
+pub const BRIDGE_MESSAGE_SEED: &[u8] = b"bridge_message";
+
+/// Seed prefix for EVMProofContext PDA
+pub const EVM_PROOF_CONTEXT_SEED: &[u8] = b"evm_proof";
+
+/// Seed prefix for bridge USDC reserve PDA
+pub const BRIDGE_RESERVE_SEED: &[u8] = b"bridge_reserve";
+
+/// Seed prefix for bridge reserve authority PDA
+pub const BRIDGE_RESERVE_AUTHORITY_SEED: &[u8] = b"bridge_reserve_authority";
+
+/// Seed prefix for Hyperlane message recipient PDA (matches Hyperlane convention)
+pub const HYPERLANE_MESSAGE_RECIPIENT_SEED: &[u8] = b"hyperlane_message_recipient";
+
+/// Seed prefix for Hyperlane handle account metas
+pub const HYPERLANE_HANDLE_ACCOUNT_METAS_SEED: &[u8] = b"handle_account_metas";
+
+/// Seed prefix for bridge operator PDA
+pub const BRIDGE_OPERATOR_SEED: &[u8] = b"bridge_operator";
+
+/// Hyperlane domain ID for Base mainnet
+pub const HYPERLANE_DOMAIN_BASE: u32 = 8453;
+
+/// Hyperlane domain ID for Base Sepolia (testnet)
+pub const HYPERLANE_DOMAIN_BASE_SEPOLIA: u32 = 84532;
+
+/// Hyperlane domain ID for Solana mainnet
+pub const HYPERLANE_DOMAIN_SOLANA: u32 = 1399811149;
+
+/// Hyperlane domain ID for Solana devnet
+pub const HYPERLANE_DOMAIN_SOLANA_DEVNET: u32 = 1399811150;
+
+/// STARK proof validity window in seconds (10 minutes)
+/// Accounts for: Hyperlane relay (~2-3 min) + SP1 proving (~1 min) + submission buffer
+pub const BRIDGE_PROOF_VALIDITY_SECONDS: i64 = 600;
+
+/// Maximum bridge transfer amount per transaction (100,000 USDC with 6 decimals)
+pub const MAX_BRIDGE_AMOUNT_PER_TX: u64 = 100_000_000_000;
+
+/// Minimum bridge transfer amount (10 USDC with 6 decimals)
+/// Higher minimum than wrapper to account for cross-chain gas costs
+pub const MIN_BRIDGE_AMOUNT: u64 = 10_000_000;
+
+/// Maximum daily bridge inflow (5,000,000 USDC with 6 decimals)
+pub const MAX_DAILY_BRIDGE_INFLOW: u64 = 5_000_000_000_000;
+
+/// Maximum number of allowed EVM lock contracts
+pub const MAX_ALLOWED_EVM_CONTRACTS: usize = 10;
+
+/// Maximum number of supported Hyperlane domains
+pub const MAX_SUPPORTED_DOMAINS: usize = 10;
+
+/// Maximum number of event logs in a proof context
+pub const MAX_EVENT_LOGS: usize = 10;
+
+/// Maximum event data size in bytes
+pub const MAX_EVENT_DATA_SIZE: usize = 256;
+
+/// Maximum number of event topics
+pub const MAX_EVENT_TOPICS: usize = 4;
+
+/// EVM address size in bytes
+pub const EVM_ADDRESS_SIZE: usize = 20;
+
+/// EVM hash size in bytes
+pub const EVM_HASH_SIZE: usize = 32;
+
+/// Bridge message body maximum size (serialized proof data + metadata)
+pub const MAX_BRIDGE_MESSAGE_BODY_SIZE: usize = 1024;
+
+/// Estimated CU for STARK proof verification (SP1)
+pub const CU_STARK_VERIFICATION: u32 = 500_000;
+
+/// Estimated CU for bridge mint execution (CPI into x0-wrapper)
+pub const CU_BRIDGE_MINT: u32 = 200_000;
+
+/// BridgeConfig account size
+pub const BRIDGE_CONFIG_SIZE: usize = 8 + // discriminator
+    1 +  // version
+    32 + // admin
+    32 + // hyperlane_mailbox
+    32 + // sp1_verifier
+    32 + // wrapper_program
+    32 + // wrapper_config
+    32 + // usdc_mint
+    32 + // wrapper_mint
+    32 + // bridge_usdc_reserve
+    1 +  // is_paused
+    8 +  // total_bridged_in
+    8 +  // total_bridged_out
+    8 +  // nonce
+    8 +  // daily_inflow_volume
+    8 +  // daily_inflow_reset_timestamp
+    4 + (MAX_ALLOWED_EVM_CONTRACTS * EVM_ADDRESS_SIZE) + // allowed_evm_contracts
+    4 + (MAX_SUPPORTED_DOMAINS * 4) + // supported_domains
+    1 +  // bump
+    64;  // reserved
+
+/// BridgeMessage account size
+pub const BRIDGE_MESSAGE_SIZE: usize = 8 + // discriminator
+    1 +  // version
+    32 + // message_id (Hyperlane)
+    4 +  // origin_domain
+    32 + // sender (EVM address padded to 32)
+    32 + // recipient (Solana pubkey)
+    8 +  // amount
+    8 +  // received_at
+    1 +  // status
+    32 + // evm_tx_hash
+    8 +  // nonce
+    1 +  // bump
+    32;  // reserved
+
+/// EVMProofContext account size
+pub const EVM_PROOF_CONTEXT_SIZE: usize = 8 + // discriminator
+    1 +  // version
+    1 +  // proof_type
+    1 +  // verified
+    8 +  // verified_at
+    32 + // block_hash
+    8 +  // block_number
+    32 + // tx_hash
+    20 + // from (EVM address)
+    20 + // to (EVM address)
+    8 +  // value
+    4 + (MAX_EVENT_LOGS * (20 + 4 + (MAX_EVENT_TOPICS * 32) + 4 + MAX_EVENT_DATA_SIZE)) + // event_logs
+    32 + // message_id (links to BridgeMessage)
+    1 +  // bump
+    32;  // reserved

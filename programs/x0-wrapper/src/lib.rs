@@ -80,6 +80,32 @@ pub mod x0_wrapper {
     }
 
     // ========================================================================
+    // Bridge Operations
+    // ========================================================================
+
+    /// Mint x0-USD for verified bridge deposits (CPI from x0-bridge only)
+    ///
+    /// The bridge program transfers USDC into the wrapper reserve first,
+    /// then calls this instruction to mint x0-USD to the recipient.
+    /// Only callable by the whitelisted bridge_program in WrapperConfig.
+    pub fn bridge_mint(
+        ctx: Context<BridgeMint>,
+        amount: u64,
+    ) -> Result<()> {
+        instructions::bridge_mint::handler(ctx, amount)
+    }
+
+    /// Set the authorized bridge program address (admin only)
+    ///
+    /// Set to Pubkey::default() to disable bridge minting.
+    pub fn set_bridge_program(
+        ctx: Context<SetBridgeProgram>,
+        bridge_program: Pubkey,
+    ) -> Result<()> {
+        instructions::set_bridge_program::handler(ctx, bridge_program)
+    }
+
+    // ========================================================================
     // Admin Operations (with Timelock)
     // ========================================================================
 

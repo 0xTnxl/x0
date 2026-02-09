@@ -33,6 +33,10 @@ export const X0_WRAPPER_PROGRAM_ID = new PublicKey(
   "EomiXBbg94Smu4ipDoJtuguazcd1KjLFDFJt2fCabvJ8"
 );
 
+export const X0_BRIDGE_PROGRAM_ID = new PublicKey(
+  "4FuyKfQysHxcTeNJtz5rBzzS8kmjn2DdkgXH1Q7edXa7"
+);
+
 // ============================================================================
 // Protocol Configuration
 // ============================================================================

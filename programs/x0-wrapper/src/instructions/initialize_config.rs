@@ -77,8 +77,9 @@ pub fn handler(ctx: Context<InitializeConfig>, redemption_fee_bps: u16) -> Resul
     config.reserve_account = reserve_account;
     config.redemption_fee_bps = redemption_fee_bps;
     config.is_paused = false;
+    config.bridge_program = Pubkey::default(); // disabled until explicitly set
     config.bump = ctx.bumps.config;
-    config._reserved = [0u8; 64];
+    config._reserved = [0u8; 32];
 
     // Initialize stats
     let stats = &mut ctx.accounts.stats;

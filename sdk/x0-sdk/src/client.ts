@@ -26,12 +26,14 @@ import { PolicyManager } from "./policy";
 import { EscrowManager } from "./escrow";
 import { RegistryManager } from "./registry";
 import { ReputationManager } from "./reputation";
+import { BridgeClient } from "./bridge";
 import {
   X0_GUARD_PROGRAM_ID,
   X0_TOKEN_PROGRAM_ID,
   X0_ESCROW_PROGRAM_ID,
   X0_REGISTRY_PROGRAM_ID,
   X0_REPUTATION_PROGRAM_ID,
+  X0_BRIDGE_PROGRAM_ID,
 } from "./constants";
 import {
   deriveAgentPolicyPda,
@@ -77,6 +79,7 @@ export interface X0ClientConfig {
   escrowProgramId?: PublicKey;
   registryProgramId?: PublicKey;
   reputationProgramId?: PublicKey;
+  bridgeProgramId?: PublicKey;
   
   // Token-2022 mint for the settlement token
   settlementMint?: PublicKey;
@@ -97,6 +100,7 @@ export class X0Client {
   readonly escrowProgramId: PublicKey;
   readonly registryProgramId: PublicKey;
   readonly reputationProgramId: PublicKey;
+  readonly bridgeProgramId: PublicKey;
   
   // Settlement token mint
   settlementMint: PublicKey | null;
@@ -106,6 +110,7 @@ export class X0Client {
   readonly escrow: EscrowManager;
   readonly registry: RegistryManager;
   readonly reputation: ReputationManager;
+  readonly bridge: BridgeClient;
   
   // Wallet (optional - for signing transactions)
   private wallet?: X0ClientConfig["wallet"];
@@ -126,6 +131,7 @@ export class X0Client {
     this.escrowProgramId = config.escrowProgramId ?? X0_ESCROW_PROGRAM_ID;
     this.registryProgramId = config.registryProgramId ?? X0_REGISTRY_PROGRAM_ID;
     this.reputationProgramId = config.reputationProgramId ?? X0_REPUTATION_PROGRAM_ID;
+    this.bridgeProgramId = config.bridgeProgramId ?? X0_BRIDGE_PROGRAM_ID;
     
     this.settlementMint = config.settlementMint ?? null;
     
@@ -134,6 +140,7 @@ export class X0Client {
     this.escrow = new EscrowManager(this.connection, this.escrowProgramId);
     this.registry = new RegistryManager(this.connection, this.registryProgramId);
     this.reputation = new ReputationManager(this.connection, this.reputationProgramId);
+    this.bridge = new BridgeClient(this.connection, this.bridgeProgramId);
   }
 
   /**

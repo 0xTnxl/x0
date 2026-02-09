@@ -618,6 +618,18 @@ pub enum X0WrapperError {
     /// Invalid action type
     #[msg("Invalid admin action type")]
     InvalidActionType, // 0x1645
+
+    // ========================================================================
+    // Bridge Integration Errors (0x1650-0x165F)
+    // ========================================================================
+
+    /// Bridge program address does not match config
+    #[msg("Unauthorized bridge program")]
+    UnauthorizedBridgeProgram, // 0x1650
+
+    /// Bridge minting is disabled (bridge_program == Pubkey::default)
+    #[msg("Bridge minting is disabled")]
+    BridgeMintDisabled, // 0x1651
 }
 
 /// Error codes for x0_zk_verifier program
@@ -688,6 +700,166 @@ pub enum X0ZkVerifierError {
     ArithmeticUnderflow, // 0x1721
 }
 
+/// Error codes for x0_bridge program
+#[error_code]
+pub enum X0BridgeError {
+    // ========================================================================
+    // Bridge Configuration Errors (0x1800-0x180F)
+    // ========================================================================
+
+    /// Bridge already initialized
+    #[msg("Bridge already initialized")]
+    BridgeAlreadyInitialized, // 0x1800
+
+    /// Bridge not initialized
+    #[msg("Bridge not initialized")]
+    BridgeNotInitialized, // 0x1801
+
+    /// Bridge is paused
+    #[msg("Bridge operations are paused")]
+    BridgePaused, // 0x1802
+
+    /// Unauthorized admin operation
+    #[msg("Unauthorized: admin required")]
+    Unauthorized, // 0x1803
+
+    /// Invalid Hyperlane mailbox address
+    #[msg("Invalid Hyperlane mailbox address")]
+    InvalidMailbox, // 0x1804
+
+    /// Invalid SP1 verifier program
+    #[msg("Invalid SP1 verifier program")]
+    InvalidSP1Verifier, // 0x1805
+
+    /// Invalid wrapper program
+    #[msg("Invalid wrapper program")]
+    InvalidWrapperProgram, // 0x1806
+
+    // ========================================================================
+    // Message Validation Errors (0x1810-0x181F)
+    // ========================================================================
+
+    /// Message origin domain not supported
+    #[msg("Unsupported origin domain")]
+    UnsupportedDomain, // 0x1810
+
+    /// Message sender contract not whitelisted
+    #[msg("Sender contract not in allowed list")]
+    UnauthorizedSenderContract, // 0x1811
+
+    /// Message already processed (replay protection)
+    #[msg("Message already processed")]
+    MessageAlreadyProcessed, // 0x1812
+
+    /// Invalid message body format
+    #[msg("Invalid message body format")]
+    InvalidMessageBody, // 0x1813
+
+    /// Message body too large
+    #[msg("Message body exceeds maximum size")]
+    MessageBodyTooLarge, // 0x1814
+
+    /// Invalid recipient address
+    #[msg("Invalid recipient Solana address")]
+    InvalidRecipient, // 0x1815
+
+    /// Caller is not the Hyperlane mailbox
+    #[msg("Caller must be the Hyperlane mailbox process authority")]
+    UnauthorizedMailboxCaller, // 0x1816
+
+    // ========================================================================
+    // Proof Verification Errors (0x1820-0x182F)
+    // ========================================================================
+
+    /// STARK proof verification failed
+    #[msg("STARK proof verification failed")]
+    ProofVerificationFailed, // 0x1820
+
+    /// Invalid proof public values
+    #[msg("Invalid proof public values")]
+    InvalidPublicValues, // 0x1821
+
+    /// EVM transaction in proof was not successful
+    #[msg("EVM transaction failed (status != 1)")]
+    EVMTransactionFailed, // 0x1822
+
+    /// Proof has expired
+    #[msg("Proof has expired (exceeded validity window)")]
+    ProofExpired, // 0x1823
+
+    /// Proof not yet verified for this message
+    #[msg("Proof has not been verified for this message")]
+    ProofNotVerified, // 0x1824
+
+    /// Proof context does not match bridge message
+    #[msg("Proof context does not match bridge message")]
+    ProofMessageMismatch, // 0x1825
+
+    /// Deposit event not found in proof logs
+    #[msg("Deposit event not found in proof event logs")]
+    DepositEventNotFound, // 0x1826
+
+    /// Proof amount does not match message amount
+    #[msg("Proof amount does not match message amount")]
+    ProofAmountMismatch, // 0x1827
+
+    // ========================================================================
+    // Amount & Rate Limiting Errors (0x1830-0x183F)
+    // ========================================================================
+
+    /// Bridge amount too small
+    #[msg("Bridge amount below minimum")]
+    AmountTooSmall, // 0x1830
+
+    /// Bridge amount too large
+    #[msg("Bridge amount exceeds per-transaction maximum")]
+    AmountTooLarge, // 0x1831
+
+    /// Daily bridge inflow limit exceeded
+    #[msg("Daily bridge inflow limit exceeded")]
+    DailyInflowLimitExceeded, // 0x1832
+
+    /// Insufficient bridge USDC reserve
+    #[msg("Insufficient bridge USDC reserve for minting")]
+    InsufficientBridgeReserve, // 0x1833
+
+    // ========================================================================
+    // State Errors (0x1840-0x184F)
+    // ========================================================================
+
+    /// Bridge message in wrong status for this operation
+    #[msg("Invalid bridge message status for this operation")]
+    InvalidMessageStatus, // 0x1840
+
+    /// Bridge message not found
+    #[msg("Bridge message not found")]
+    MessageNotFound, // 0x1841
+
+    /// EVM proof context not found
+    #[msg("EVM proof context not found")]
+    ProofContextNotFound, // 0x1842
+
+    /// Too many allowed EVM contracts
+    #[msg("Too many allowed EVM contracts")]
+    TooManyEVMContracts, // 0x1843
+
+    /// Too many supported domains
+    #[msg("Too many supported domains")]
+    TooManySupportedDomains, // 0x1844
+
+    // ========================================================================
+    // Math Errors (0x1850-0x185F)
+    // ========================================================================
+
+    /// Arithmetic overflow
+    #[msg("Arithmetic overflow in calculation")]
+    MathOverflow, // 0x1850
+
+    /// Arithmetic underflow
+    #[msg("Arithmetic underflow in calculation")]
+    MathUnderflow, // 0x1851
+}
+
 /// Unified error type for cross-program invocations
 #[derive(Clone, Debug)]
 pub enum X0Error {
@@ -697,4 +869,5 @@ pub enum X0Error {
     Reputation(X0ReputationError),
     Token(X0TokenError),
     Wrapper(X0WrapperError),
+    Bridge(X0BridgeError),
 }

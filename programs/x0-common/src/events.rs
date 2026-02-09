@@ -540,3 +540,154 @@ pub struct AdminTransferred {
     /// Unix timestamp
     pub timestamp: i64,
 }
+
+// ============================================================================
+// Bridge Events (Base → Solana cross-chain)
+// ============================================================================
+
+/// Emitted when the bridge is initialized
+#[event]
+pub struct BridgeInitialized {
+    /// Bridge config PDA
+    pub config: Pubkey,
+    /// Admin address
+    pub admin: Pubkey,
+    /// Hyperlane mailbox program
+    pub hyperlane_mailbox: Pubkey,
+    /// SP1 verifier program
+    pub sp1_verifier: Pubkey,
+    /// USDC mint address
+    pub usdc_mint: Pubkey,
+    /// Unix timestamp
+    pub timestamp: i64,
+}
+
+/// Emitted when a cross-chain message is received from Hyperlane
+#[event]
+pub struct BridgeMessageReceived {
+    /// Bridge message PDA
+    pub message_pda: Pubkey,
+    /// Hyperlane message ID
+    pub message_id: [u8; 32],
+    /// Origin Hyperlane domain
+    pub origin_domain: u32,
+    /// Sender address on origin chain (padded to 32 bytes)
+    pub sender: [u8; 32],
+    /// Recipient address on Solana
+    pub recipient: Pubkey,
+    /// Amount to bridge (in micro-units)
+    pub amount: u64,
+    /// Unix timestamp
+    pub timestamp: i64,
+}
+
+/// Emitted when a STARK proof is verified for a bridge message
+#[event]
+pub struct BridgeProofVerified {
+    /// EVM proof context PDA
+    pub proof_context: Pubkey,
+    /// Linked bridge message PDA
+    pub message_pda: Pubkey,
+    /// Hyperlane message ID
+    pub message_id: [u8; 32],
+    /// EVM block number where lock occurred
+    pub evm_block_number: u64,
+    /// EVM transaction hash
+    pub evm_tx_hash: [u8; 32],
+    /// Verified amount
+    pub amount: u64,
+    /// Unix timestamp
+    pub timestamp: i64,
+}
+
+/// Emitted when x0-USD is minted via verified bridge deposit
+#[event]
+pub struct BridgeMintExecuted {
+    /// Bridge message PDA
+    pub message_pda: Pubkey,
+    /// Hyperlane message ID
+    pub message_id: [u8; 32],
+    /// Recipient who received x0-USD
+    pub recipient: Pubkey,
+    /// Amount of x0-USD minted
+    pub amount: u64,
+    /// Origin domain (e.g., Base)
+    pub origin_domain: u32,
+    /// New bridge total inflow
+    pub total_bridged_in: u64,
+    /// Unix timestamp
+    pub timestamp: i64,
+}
+
+/// Emitted when bridge daily rate limit resets
+#[event]
+pub struct BridgeDailyReset {
+    /// Bridge config PDA
+    pub config: Pubkey,
+    /// Previous day's total volume
+    pub previous_volume: u64,
+    /// Unix timestamp
+    pub timestamp: i64,
+}
+
+/// Emitted when bridge is paused or unpaused
+#[event]
+pub struct BridgePausedEvent {
+    /// Bridge config PDA
+    pub config: Pubkey,
+    /// Whether bridge is now paused
+    pub is_paused: bool,
+    /// Admin who triggered
+    pub admin: Pubkey,
+    /// Unix timestamp
+    pub timestamp: i64,
+}
+
+/// Emitted when an EVM contract is added/removed from the allowed list
+#[event]
+pub struct BridgeContractUpdated {
+    /// Bridge config PDA
+    pub config: Pubkey,
+    /// EVM contract address (20 bytes)
+    pub evm_contract: [u8; 20],
+    /// Whether the contract was added (true) or removed (false)
+    pub added: bool,
+    /// Admin who triggered
+    pub admin: Pubkey,
+    /// Unix timestamp
+    pub timestamp: i64,
+}
+
+// ============================================================================
+// Wrapper-Side Bridge Events
+// ============================================================================
+
+/// Emitted by x0-wrapper when bridge_mint is called
+#[event]
+pub struct WrapperBridgeMint {
+    /// The bridge program that invoked bridge_mint
+    pub bridge_program: Pubkey,
+    /// Recipient of the minted x0-USD
+    pub recipient: Pubkey,
+    /// Amount of x0-USD minted
+    pub amount: u64,
+    /// New reserve USDC balance
+    pub reserve_balance: u64,
+    /// New outstanding wrapper supply
+    pub outstanding_supply: u64,
+    /// Unix timestamp
+    pub timestamp: i64,
+}
+
+/// Emitted when the bridge program address is updated in WrapperConfig
+#[event]
+pub struct WrapperBridgeProgramUpdated {
+    /// Previous bridge program address
+    pub old_bridge_program: Pubkey,
+    /// New bridge program address
+    pub new_bridge_program: Pubkey,
+    /// Admin who made the change
+    pub admin: Pubkey,
+    /// Unix timestamp
+    pub timestamp: i64,
+}

@@ -1,0 +1,20 @@
+[package]
+name = "x0-sp1-guest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "SP1 guest program: EVM transaction verification circuit for x0 bridge"
+
+# SP1 guest programs must be built as binaries
+[[bin]]
+name = "evm-verifier"
+path = "src/main.rs"
+
+[dependencies]
+x0-sp1-common = { path = "../common" }
+sp1-zkvm = "3.0"
+tiny-keccak = { version = "2.0", features = ["keccak"] }
+borsh = { version = "0.10", default-features = false }
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }

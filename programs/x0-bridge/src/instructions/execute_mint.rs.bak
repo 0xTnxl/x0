@@ -1,0 +1,324 @@
+//! Execute minting of x0-USD for a verified bridge deposit (Step 3)
+//!
+//! After both the Hyperlane message is received (Step 1) and the STARK
+//! proof is verified (Step 2), this instruction mints x0-USD to the
+//! recipient via CPI to x0-wrapper's deposit_and_mint.
+//!
+//! # CPI to x0-wrapper
+//!
+//! The bridge acts as a depositor into x0-wrapper:
+//! 1. Transfers USDC from bridge_usdc_reserve → wrapper's USDC reserve
+//! 2. x0-wrapper mints x0-USD to the bridge recipient
+//!
+//! This preserves the 1:1 reserve invariant (reserve >= supply).
+//!
+//! # Permissionless
+//!
+//! Anyone can call this to execute mints for verified messages.
+//! This enables keeper services to process bridge deposits automatically.
+
+use anchor_lang::prelude::*;
+use anchor_spl::token_2022::Token2022;
+use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface, TransferChecked};
+
+use crate::state::{BridgeConfig, BridgeMessage, BridgeMessageStatus, EVMProofContext};
+use x0_common::{
+    constants::*,
+    error::X0BridgeError,
+    events::BridgeMintExecuted,
+};
+
+#[derive(Accounts)]
+pub struct ExecuteMint<'info> {
+    /// Payer for transaction fees (keeper/relayer)
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    /// Bridge configuration
+    #[account(
+        mut,
+        seeds = [BRIDGE_CONFIG_SEED],
+        bump = config.bump,
+        constraint = !config.is_paused @ X0BridgeError::BridgePaused,
+    )]
+    pub config: Box<Account<'info, BridgeConfig>>,
+
+    /// The verified bridge message
+    #[account(
+        mut,
+        seeds = [BRIDGE_MESSAGE_SEED, &bridge_message.message_id],
+        bump = bridge_message.bump,
+        constraint = bridge_message.status == BridgeMessageStatus::ProofVerified
+            @ X0BridgeError::InvalidMessageStatus,
+    )]
+    pub bridge_message: Box<Account<'info, BridgeMessage>>,
+
+    /// The verified EVM proof context
+    #[account(
+        seeds = [EVM_PROOF_CONTEXT_SEED, &bridge_message.message_id],
+        bump = proof_context.bump,
+        constraint = proof_context.verified @ X0BridgeError::ProofNotVerified,
+        constraint = proof_context.message_id == bridge_message.message_id
+            @ X0BridgeError::ProofMessageMismatch,
+    )]
+    pub proof_context: Box<Account<'info, EVMProofContext>>,
+
+    // ========================================================================
+    // Bridge reserve accounts (source of USDC)
+    // ========================================================================
+
+    /// Bridge's USDC reserve (source)
+    #[account(
+        mut,
+        constraint = bridge_usdc_reserve.key() == config.bridge_usdc_reserve
+            @ X0BridgeError::InsufficientBridgeReserve,
+    )]
+    pub bridge_usdc_reserve: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// Bridge reserve authority PDA (signer for reserve transfers)
+    /// CHECK: PDA validated by seeds
+    #[account(
+        seeds = [BRIDGE_RESERVE_AUTHORITY_SEED],
+        bump,
+    )]
+    pub bridge_reserve_authority: UncheckedAccount<'info>,
+
+    // ========================================================================
+    // x0-wrapper CPI accounts
+    // ========================================================================
+
+    /// x0-wrapper config PDA
+    /// CHECK: Validated against config.wrapper_config
+    #[account(
+        constraint = wrapper_config.key() == config.wrapper_config
+            @ X0BridgeError::InvalidWrapperProgram,
+    )]
+    pub wrapper_config: UncheckedAccount<'info>,
+
+    /// x0-wrapper stats PDA (mutable for CPI)
+    /// CHECK: Validated by x0-wrapper during CPI
+    #[account(mut)]
+    pub wrapper_stats: UncheckedAccount<'info>,
+
+    /// USDC mint
+    #[account(
+        constraint = usdc_mint.key() == config.usdc_mint,
+    )]
+    pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    /// x0-USD wrapper mint (mutable for minting)
+    #[account(
+        mut,
+        constraint = wrapper_mint.key() == config.wrapper_mint,
+    )]
+    pub wrapper_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    /// x0-wrapper's USDC reserve (destination for bridge USDC)
+    #[account(mut)]
+    pub wrapper_reserve_account: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// x0-wrapper's mint authority PDA
+    /// CHECK: Validated by x0-wrapper during CPI
+    pub wrapper_mint_authority: UncheckedAccount<'info>,
+
+    /// Recipient's x0-USD token account (receives minted tokens)
+    #[account(
+        mut,
+        constraint = recipient_wrapper_account.mint == config.wrapper_mint,
+        constraint = recipient_wrapper_account.owner == bridge_message.recipient
+            @ X0BridgeError::InvalidRecipient,
+    )]
+    pub recipient_wrapper_account: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    // ========================================================================
+    // Programs
+    // ========================================================================
+
+    /// x0-wrapper program for CPI
+    /// CHECK: Validated against config.wrapper_program
+    #[account(
+        constraint = wrapper_program.key() == config.wrapper_program
+            @ X0BridgeError::InvalidWrapperProgram,
+    )]
+    pub wrapper_program: UncheckedAccount<'info>,
+
+    /// Token-2022 program for x0-USD mint
+    pub token_2022_program: Program<'info, Token2022>,
+
+    /// Token program for USDC transfers
+    pub usdc_token_program: Interface<'info, TokenInterface>,
+}
+
+pub fn handler(ctx: Context<ExecuteMint>) -> Result<()> {
+    let clock = Clock::get()?;
+    let config = &mut ctx.accounts.config;
+    let bridge_message = &mut ctx.accounts.bridge_message;
+    let proof_context = &ctx.accounts.proof_context;
+
+    // ========================================================================
+    // Pre-validation
+    // ========================================================================
+
+    // Verify proof is fresh (within validity window)
+    require!(
+        proof_context.is_fresh(clock.unix_timestamp),
+        X0BridgeError::ProofExpired
+    );
+
+    let amount = bridge_message.amount;
+
+    // Verify bridge reserve has sufficient USDC liquidity
+    require!(
+        ctx.accounts.bridge_usdc_reserve.amount >= amount,
+        X0BridgeError::InsufficientBridgeReserve
+    );
+
+    // ========================================================================
+    // Step 1: Transfer USDC from bridge reserve → x0-wrapper reserve
+    // ========================================================================
+
+    let reserve_authority_bump = ctx.bumps.bridge_reserve_authority;
+    let reserve_seeds = &[
+        BRIDGE_RESERVE_AUTHORITY_SEED,
+        &[reserve_authority_bump],
+    ];
+    let signer_seeds = &[&reserve_seeds[..]];
+
+    // Transfer USDC from bridge reserve to wrapper reserve
+    let transfer_accounts = TransferChecked {
+        from: ctx.accounts.bridge_usdc_reserve.to_account_info(),
+        mint: ctx.accounts.usdc_mint.to_account_info(),
+        to: ctx.accounts.wrapper_reserve_account.to_account_info(),
+        authority: ctx.accounts.bridge_reserve_authority.to_account_info(),
+    };
+
+    let cpi_ctx = CpiContext::new_with_signer(
+        ctx.accounts.usdc_token_program.to_account_info(),
+        transfer_accounts,
+        signer_seeds,
+    );
+
+    anchor_spl::token_interface::transfer_checked(cpi_ctx, amount, WRAPPER_DECIMALS)?;
+
+    // ========================================================================
+    // Step 2: CPI to x0-wrapper deposit_and_mint
+    //
+    // The wrapper expects the USDC to be in its reserve already (we just
+    // transferred it above). We now CPI into the wrapper to mint x0-USD.
+    //
+    // We use a low-level CPI here because the wrapper's deposit_and_mint
+    // instruction expects the *user* to transfer USDC. Instead, we've
+    // already done the transfer, so we directly invoke the mint portion.
+    //
+    // Alternative approach: We could add a bridge-specific instruction
+    // to x0-wrapper. For now, we mint directly with mint_authority.
+    // ========================================================================
+
+    // Build the CPI to x0-wrapper program which owns the mint authority
+    // We need to call through the wrapper program since it owns the mint authority PDA
+    let mint_data = build_wrapper_bridge_mint_ix(amount, bridge_message.recipient)?;
+
+    let mint_accounts = vec![
+        AccountMeta::new(ctx.accounts.wrapper_mint.key(), false),
+        AccountMeta::new(ctx.accounts.recipient_wrapper_account.key(), false),
+        AccountMeta::new_readonly(ctx.accounts.wrapper_mint_authority.key(), false),
+        AccountMeta::new_readonly(ctx.accounts.wrapper_config.key(), false),
+        AccountMeta::new(ctx.accounts.wrapper_stats.key(), false),
+        AccountMeta::new_readonly(ctx.accounts.usdc_mint.key(), false),
+        AccountMeta::new(ctx.accounts.wrapper_reserve_account.key(), false),
+        AccountMeta::new_readonly(ctx.accounts.token_2022_program.key(), false),
+        AccountMeta::new_readonly(ctx.accounts.usdc_token_program.key(), false),
+    ];
+
+    // For the CPI, we use the bridge reserve authority as the signer
+    // The x0-wrapper program will validate the mint authority PDA internally
+    let mint_ix = solana_program::instruction::Instruction {
+        program_id: ctx.accounts.wrapper_program.key(),
+        accounts: mint_accounts,
+        data: mint_data,
+    };
+
+    // Invoke the CPI into x0-wrapper with bridge_reserve_authority as signer.
+    // The wrapper's deposit_and_mint validates:
+    // 1. USDC is in the reserve (we transferred it above)
+    // 2. Mint authority PDA owns x0-USD mint
+    // 3. Stats are updated atomically
+    solana_program::program::invoke_signed(
+        &mint_ix,
+        &[
+            ctx.accounts.wrapper_program.to_account_info(),
+            ctx.accounts.wrapper_mint.to_account_info(),
+            ctx.accounts.recipient_wrapper_account.to_account_info(),
+            ctx.accounts.wrapper_mint_authority.to_account_info(),
+            ctx.accounts.wrapper_config.to_account_info(),
+            ctx.accounts.wrapper_stats.to_account_info(),
+            ctx.accounts.usdc_mint.to_account_info(),
+            ctx.accounts.wrapper_reserve_account.to_account_info(),
+            ctx.accounts.token_2022_program.to_account_info(),
+            ctx.accounts.usdc_token_program.to_account_info(),
+            ctx.accounts.bridge_reserve_authority.to_account_info(),
+        ],
+        signer_seeds, // bridge_reserve_authority PDA signs
+    )?;
+
+    msg!(
+        "Minting {} x0-USD to {} via bridge",
+        amount,
+        bridge_message.recipient,
+    );
+
+    // ========================================================================
+    // Step 3: Update state
+    // ========================================================================
+
+    // Update bridge message to terminal state
+    bridge_message.status = BridgeMessageStatus::Minted;
+
+    // Update bridge totals
+    config.total_bridged_in = config
+        .total_bridged_in
+        .checked_add(amount)
+        .ok_or(X0BridgeError::MathOverflow)?;
+
+    // ========================================================================
+    // Step 4: Emit event
+    // ========================================================================
+
+    emit!(BridgeMintExecuted {
+        message_pda: bridge_message.key(),
+        message_id: bridge_message.message_id,
+        recipient: bridge_message.recipient,
+        amount,
+        origin_domain: bridge_message.origin_domain,
+        total_bridged_in: config.total_bridged_in,
+        timestamp: clock.unix_timestamp,
+    });
+
+    msg!(
+        "Bridge mint executed: message_id={}, recipient={}, amount={}",
+        hex::encode(bridge_message.message_id),
+        bridge_message.recipient,
+        amount,
+    );
+
+    Ok(())
+}
+
+/// Build the instruction data for x0-wrapper's bridge mint
+///
+/// This constructs the Anchor instruction discriminator and arguments
+/// for a deposit_and_mint call through x0-wrapper.
+fn build_wrapper_bridge_mint_ix(amount: u64, _recipient: Pubkey) -> Result<Vec<u8>> {
+    use sha2::{Sha256, Digest};
+
+    // Anchor discriminator: SHA256("global:deposit_and_mint")[0..8]
+    let mut hasher = Sha256::new();
+    hasher.update(b"global:deposit_and_mint");
+    let hash = hasher.finalize();
+
+    let mut data = Vec::with_capacity(16);
+    data.extend_from_slice(&hash[..8]);
+    data.extend_from_slice(&amount.to_le_bytes());
+
+    Ok(data)
+}

@@ -20,6 +20,7 @@ dist/
 *.swp
 *.swo
 /docs/
+/hyperlane-typescript/
 
 # Environment
 .env

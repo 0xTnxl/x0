@@ -1,0 +1,30 @@
+[package]
+name = "x0-sp1-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "SP1 host program: fetches EVM artifacts and generates STARK proofs for x0 bridge"
+
+[dependencies]
+x0-sp1-common = { path = "../common" }
+sp1-sdk = "3.0"
+tokio = { version = "1", features = ["full"] }
+alloy-provider = { version = "0.3", features = ["reqwest"] }
+alloy-transport-http = "0.3"
+alloy-rpc-types = "0.3"
+alloy-primitives = "0.8"
+alloy-rlp = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+borsh = "0.10"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1.0"
+hex = "0.4"
+reqwest = { version = "0.12", features = ["json"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tiny-keccak = { version = "2.0", features = ["keccak"] }
+bincode = "1.3"
+base64 = "0.22"
