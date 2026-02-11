@@ -538,8 +538,18 @@ pub const BRIDGE_CONFIG_SIZE: usize = 8 + // discriminator
     8 +  // daily_inflow_reset_timestamp
     4 + (MAX_ALLOWED_EVM_CONTRACTS * EVM_ADDRESS_SIZE) + // allowed_evm_contracts
     4 + (MAX_SUPPORTED_DOMAINS * 4) + // supported_domains
+    8 +  // admin_action_nonce
     1 +  // bump
-    64;  // reserved
+    56;  // reserved
+
+/// Circuit breaker threshold (100M USDC with 6 decimals)
+/// If total_bridged_in exceeds this, bridge auto-pauses
+pub const BRIDGE_CIRCUIT_BREAKER_THRESHOLD: u64 = 100_000_000_000_000;
+
+/// Hyperlane PDA seed components (must match Hyperlane Sealevel programs)
+pub const HYPERLANE_SEED: &[u8] = b"hyperlane";
+pub const HYPERLANE_SEPARATOR: &[u8] = b"-";
+pub const HYPERLANE_PROCESS_AUTHORITY: &[u8] = b"process_authority";
 
 /// BridgeMessage account size
 pub const BRIDGE_MESSAGE_SIZE: usize = 8 + // discriminator
@@ -570,5 +580,29 @@ pub const EVM_PROOF_CONTEXT_SIZE: usize = 8 + // discriminator
     8 +  // value
     4 + (MAX_EVENT_LOGS * (20 + 4 + (MAX_EVENT_TOPICS * 32) + 4 + MAX_EVENT_DATA_SIZE)) + // event_logs
     32 + // message_id (links to BridgeMessage)
+    1 +  // bump
+    32;  // reserved
+
+// ============================================================================
+// Bridge Admin Timelock Configuration
+// ============================================================================
+
+/// Seed prefix for BridgeAdminAction PDA
+pub const BRIDGE_ADMIN_ACTION_SEED: &[u8] = b"bridge_admin_action";
+
+/// Timelock duration for bridge admin operations (48 hours in seconds)
+pub const BRIDGE_ADMIN_TIMELOCK_SECONDS: i64 = 172_800;
+
+/// BridgeAdminAction account size
+pub const BRIDGE_ADMIN_ACTION_SIZE: usize = 8 + // discriminator
+    8 +  // nonce
+    1 +  // action_type
+    8 +  // scheduled_at
+    20 + // evm_contract
+    4 +  // domain
+    32 + // new_address
+    32 + // scheduled_by
+    1 +  // executed
+    1 +  // cancelled
     1 +  // bump
     32;  // reserved

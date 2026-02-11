@@ -691,3 +691,71 @@ pub struct WrapperBridgeProgramUpdated {
     /// Unix timestamp
     pub timestamp: i64,
 }
+
+// ============================================================================
+// Bridge Admin Timelock Events
+// ============================================================================
+
+/// Emitted when a timelocked admin action is scheduled
+#[event]
+pub struct BridgeAdminActionScheduled {
+    /// Action PDA
+    pub action_pda: Pubkey,
+    /// Action nonce
+    pub nonce: u64,
+    /// Type of action (0=AddEvmContract, 1=RemoveEvmContract, 2=AddDomain, 3=RemoveDomain, 4=UpdateSp1Verifier)
+    pub action_type: u8,
+    /// Scheduled execution time
+    pub scheduled_at: i64,
+    /// EVM contract (if applicable)
+    pub evm_contract: [u8; 20],
+    /// Domain (if applicable)
+    pub domain: u32,
+    /// Admin who scheduled
+    pub admin: Pubkey,
+    /// Unix timestamp when scheduled
+    pub timestamp: i64,
+}
+
+/// Emitted when a timelocked admin action is executed
+#[event]
+pub struct BridgeAdminActionExecuted {
+    /// Action PDA
+    pub action_pda: Pubkey,
+    /// Action nonce
+    pub nonce: u64,
+    /// Type of action
+    pub action_type: u8,
+    /// Admin who executed
+    pub admin: Pubkey,
+    /// Unix timestamp when executed
+    pub timestamp: i64,
+}
+
+/// Emitted when a timelocked admin action is cancelled
+#[event]
+pub struct BridgeAdminActionCancelled {
+    /// Action PDA
+    pub action_pda: Pubkey,
+    /// Action nonce
+    pub nonce: u64,
+    /// Type of action
+    pub action_type: u8,
+    /// Admin who cancelled
+    pub admin: Pubkey,
+    /// Unix timestamp when cancelled
+    pub timestamp: i64,
+}
+
+/// Emitted when the circuit breaker is triggered
+#[event]
+pub struct BridgeCircuitBreakerTriggered {
+    /// Bridge config PDA
+    pub config: Pubkey,
+    /// Total bridged in at time of trigger
+    pub total_bridged_in: u64,
+    /// Circuit breaker threshold
+    pub threshold: u64,
+    /// Unix timestamp
+    pub timestamp: i64,
+}

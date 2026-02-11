@@ -29,8 +29,15 @@ use x0_common::{
 #[derive(Accounts)]
 pub struct BridgeMint<'info> {
     /// The bridge authority PDA that signed this CPI call.
-    /// Must match `config.bridge_program` — this is NOT a program ID check,
-    /// it's the bridge's PDA signer passed through from invoke_signed.
+    ///
+    /// SECURITY: Must match `config.bridge_program` exactly.
+    /// This prevents unauthorized callers from minting x0-USD.
+    /// The bridge program's PDA (bridge_reserve_authority) signs the CPI,
+    /// and we verify its address matches what's configured.
+    #[account(
+        constraint = bridge_signer.key() == config.bridge_program
+            @ X0WrapperError::UnauthorizedBridgeProgram,
+    )]
     pub bridge_signer: Signer<'info>,
 
     /// The wrapper configuration
@@ -95,24 +102,9 @@ pub fn handler(ctx: Context<BridgeMint>, amount: u64) -> Result<()> {
     let clock = Clock::get()?;
 
     // ========================================================================
-    // Validate caller is the authorized bridge program
-    // ========================================================================
-    //
-    // We check that the CPI was invoked by the bridge program.
-    // The bridge_signer is the bridge's PDA that signed the invoke_signed.
-    // We verify the calling program matches config.bridge_program by
-    // checking the instruction sysvar's program_id stack.
-    //
-    // Alternatively, we could check bridge_signer is derived from
-    // bridge_program. For now, we rely on the Anchor constraint that
-    // config.bridge_program is set, and the Signer check ensures the
-    // bridge's PDA signed the transaction.
-    //
-    // A complementary runtime check:
-    // The bridge_signer must be owned by the bridge program.
-    // Since it's a PDA of the bridge program, its owner is the bridge program.
-
     // Validate amount
+    // ========================================================================
+
     require!(amount > 0, X0WrapperError::DepositTooSmall);
 
     // ========================================================================

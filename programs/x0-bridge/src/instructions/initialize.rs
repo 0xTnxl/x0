@@ -109,8 +109,9 @@ pub fn handler(
     config.daily_inflow_reset_timestamp = clock.unix_timestamp;
     config.allowed_evm_contracts = allowed_evm_contracts;
     config.supported_domains = supported_domains;
+    config.admin_action_nonce = 0;
     config.bump = ctx.bumps.config;
-    config._reserved = [0u8; 64];
+    config._reserved = [0u8; 56];
 
     emit!(BridgeInitialized {
         config: config.key(),

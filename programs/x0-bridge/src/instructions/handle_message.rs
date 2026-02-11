@@ -9,6 +9,15 @@
 //! with three arguments: origin domain, sender address, and message body.
 //! The mailbox process authority PDA must be the caller.
 //!
+//! # Security: Process Authority Validation
+//!
+//! The `process_authority` MUST be a PDA derived from the Hyperlane mailbox
+//! program using these seeds:
+//!   ["hyperlane", "-", "process_authority", "-", <this_program_id>]
+//!
+//! This ensures only the legitimate Hyperlane mailbox can call this instruction.
+//! Without this check, anyone could forge messages.
+//!
 //! # Message Body Format
 //!
 //! The message body is encoded by the EVM lock contract:
@@ -28,6 +37,29 @@ use x0_common::{
     events::BridgeMessageReceived,
 };
 
+/// Derive the expected Hyperlane process authority PDA
+///
+/// Matches Hyperlane Sealevel mailbox:
+/// https://github.com/hyperlane-xyz/hyperlane-monorepo/blob/main/rust/sealevel/programs/mailbox/src/pda_seeds.rs
+///
+/// Seeds: ["hyperlane", "-", "process_authority", "-", recipient_program_id]
+/// Program: hyperlane_mailbox
+fn derive_hyperlane_process_authority(
+    hyperlane_mailbox: &Pubkey,
+    recipient_program: &Pubkey,
+) -> Pubkey {
+    Pubkey::find_program_address(
+        &[
+            HYPERLANE_SEED,
+            HYPERLANE_SEPARATOR,
+            HYPERLANE_PROCESS_AUTHORITY,
+            HYPERLANE_SEPARATOR,
+            recipient_program.as_ref(),
+        ],
+        hyperlane_mailbox,
+    ).0
+}
+
 #[derive(Accounts)]
 #[instruction(origin: u32, sender: [u8; 32], message_body: Vec<u8>)]
 pub struct HandleMessage<'info> {
@@ -41,8 +73,21 @@ pub struct HandleMessage<'info> {
     /// The mailbox program derives this PDA and uses it as the caller authority
     /// when invoking the recipient's handle instruction.
     ///
-    /// CHECK: Validated against config.hyperlane_mailbox via PDA derivation
+    /// SECURITY: Must be derived from the Hyperlane mailbox using:
+    ///   seeds = ["hyperlane", "-", "process_authority", "-", this_program_id]
+    ///   program_id = config.hyperlane_mailbox
+    ///
+    /// CHECK: Validated in handler via derive_hyperlane_process_authority()
     pub process_authority: Signer<'info>,
+
+    /// Hyperlane mailbox program
+    ///
+    /// CHECK: Validated against config.hyperlane_mailbox
+    #[account(
+        constraint = hyperlane_mailbox.key() == config.hyperlane_mailbox
+            @ X0BridgeError::InvalidMailbox,
+    )]
+    pub hyperlane_mailbox: UncheckedAccount<'info>,
 
     /// Bridge configuration (validates domain, sender, paused state)
     #[account(
@@ -100,6 +145,23 @@ pub fn handler(
     let config = &mut ctx.accounts.config;
 
     // ========================================================================
+    // CRITICAL: Validate Hyperlane Process Authority
+    //
+    // This is the primary security check that prevents message spoofing.
+    // The process_authority must be a PDA derived from the Hyperlane mailbox.
+    // ========================================================================
+
+    let expected_process_authority = derive_hyperlane_process_authority(
+        &ctx.accounts.hyperlane_mailbox.key(),
+        &crate::ID,  // Our program ID is the recipient
+    );
+
+    require!(
+        ctx.accounts.process_authority.key() == expected_process_authority,
+        X0BridgeError::InvalidProcessAuthority
+    );
+
+    // ========================================================================
     // Validation
     // ========================================================================
 
@@ -109,9 +171,14 @@ pub fn handler(
         X0BridgeError::UnsupportedDomain
     );
 
-    // Validate sender is an allowed EVM contract
-    // The sender is a 32-byte Hyperlane address; extract the 20-byte EVM address
-    // (EVM addresses are left-padded with 12 zero bytes in Hyperlane format)
+    // Validate EVM sender format: first 12 bytes must be zeros
+    // Hyperlane uses 32-byte addresses; EVM addresses are left-padded with 12 zeros
+    require!(
+        sender[0..12] == [0u8; 12],
+        X0BridgeError::InvalidSenderFormat
+    );
+
+    // Extract the 20-byte EVM address from the 32-byte Hyperlane format
     let mut evm_sender = [0u8; EVM_ADDRESS_SIZE];
     evm_sender.copy_from_slice(&sender[12..32]);
     require!(

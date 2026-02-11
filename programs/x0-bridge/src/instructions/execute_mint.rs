@@ -243,10 +243,30 @@ pub fn handler(ctx: Context<ExecuteMint>) -> Result<()> {
     bridge_message.status = BridgeMessageStatus::Minted;
 
     // Update bridge totals
-    config.total_bridged_in = config
+    let new_total_bridged_in = config
         .total_bridged_in
         .checked_add(amount)
         .ok_or(X0BridgeError::MathOverflow)?;
+
+    // ========================================================================
+    // CIRCUIT BREAKER: Auto-pause if threshold exceeded
+    //
+    // Safety mechanism to prevent catastrophic losses if the bridge is
+    // exploited. Once total_bridged_in exceeds the threshold, the bridge
+    // auto-pauses and requires admin intervention to resume.
+    // ========================================================================
+
+    if new_total_bridged_in > BRIDGE_CIRCUIT_BREAKER_THRESHOLD {
+        config.is_paused = true;
+        msg!(
+            "CIRCUIT BREAKER TRIGGERED: total_bridged_in={} exceeds threshold={}",
+            new_total_bridged_in,
+            BRIDGE_CIRCUIT_BREAKER_THRESHOLD,
+        );
+        return Err(X0BridgeError::CircuitBreakerTriggered.into());
+    }
+
+    config.total_bridged_in = new_total_bridged_in;
 
     // ========================================================================
     // Step 4: Emit event

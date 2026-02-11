@@ -767,6 +767,18 @@ pub enum X0BridgeError {
     #[msg("Caller must be the Hyperlane mailbox process authority")]
     UnauthorizedMailboxCaller, // 0x1816
 
+    /// Invalid Hyperlane process authority PDA
+    #[msg("Invalid Hyperlane process authority: PDA derivation mismatch")]
+    InvalidProcessAuthority, // 0x1817
+
+    /// Invalid EVM sender format (first 12 bytes must be zeros)
+    #[msg("Invalid EVM sender format: expected 12-byte zero padding")]
+    InvalidSenderFormat, // 0x1818
+
+    /// Circuit breaker triggered: total bridged volume too high
+    #[msg("Circuit breaker triggered: bridge volume exceeds safety threshold")]
+    CircuitBreakerTriggered, // 0x1819
+
     // ========================================================================
     // Proof Verification Errors (0x1820-0x182F)
     // ========================================================================
@@ -858,6 +870,34 @@ pub enum X0BridgeError {
     /// Arithmetic underflow
     #[msg("Arithmetic underflow in calculation")]
     MathUnderflow, // 0x1851
+
+    // ========================================================================
+    // Admin Timelock Errors (0x1860-0x186F)
+    // ========================================================================
+
+    /// Admin action not found
+    #[msg("Admin action not found")]
+    AdminActionNotFound, // 0x1860
+
+    /// Admin action already executed
+    #[msg("Admin action has already been executed")]
+    AdminActionAlreadyExecuted, // 0x1861
+
+    /// Admin action was cancelled
+    #[msg("Admin action was cancelled")]
+    AdminActionCancelled, // 0x1862
+
+    /// Timelock has not expired yet
+    #[msg("Timelock period has not expired - action not ready")]
+    TimelockNotExpired, // 0x1863
+
+    /// Action type mismatch
+    #[msg("Admin action type does not match expected")]
+    ActionTypeMismatch, // 0x1864
+
+    /// Invalid action nonce
+    #[msg("Invalid action nonce")]
+    InvalidActionNonce, // 0x1865
 }
 
 /// Unified error type for cross-program invocations

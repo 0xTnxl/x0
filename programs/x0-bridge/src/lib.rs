@@ -192,6 +192,58 @@ pub mod x0_bridge {
         instructions::admin::set_paused(ctx, paused)
     }
 
+    // ========================================================================
+    // Timelocked Admin Operations (48h delay)
+    // ========================================================================
+
+    /// Schedule adding an EVM contract (48h timelock)
+    pub fn schedule_add_evm_contract(
+        ctx: Context<ScheduleAdminAction>,
+        evm_contract: [u8; 20],
+    ) -> Result<()> {
+        instructions::admin_timelock::schedule_add_evm_contract(ctx, evm_contract)
+    }
+
+    /// Schedule removing an EVM contract (48h timelock)
+    pub fn schedule_remove_evm_contract(
+        ctx: Context<ScheduleAdminAction>,
+        evm_contract: [u8; 20],
+    ) -> Result<()> {
+        instructions::admin_timelock::schedule_remove_evm_contract(ctx, evm_contract)
+    }
+
+    /// Schedule adding a Hyperlane domain (48h timelock)
+    pub fn schedule_add_domain(
+        ctx: Context<ScheduleAdminAction>,
+        domain: u32,
+    ) -> Result<()> {
+        instructions::admin_timelock::schedule_add_domain(ctx, domain)
+    }
+
+    /// Schedule removing a Hyperlane domain (48h timelock)
+    pub fn schedule_remove_domain(
+        ctx: Context<ScheduleAdminAction>,
+        domain: u32,
+    ) -> Result<()> {
+        instructions::admin_timelock::schedule_remove_domain(ctx, domain)
+    }
+
+    /// Execute a scheduled admin action (after 48h)
+    pub fn execute_admin_action(
+        ctx: Context<ExecuteAdminAction>,
+        nonce: u64,
+    ) -> Result<()> {
+        instructions::admin_timelock::execute_admin_action(ctx, nonce)
+    }
+
+    /// Cancel a scheduled admin action
+    pub fn cancel_admin_action(
+        ctx: Context<CancelAdminAction>,
+        nonce: u64,
+    ) -> Result<()> {
+        instructions::admin_timelock::cancel_admin_action(ctx, nonce)
+    }
+
     /// Replenish the bridge USDC reserve
     ///
     /// Allows anyone to deposit USDC into the bridge's reserve account.

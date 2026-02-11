@@ -64,24 +64,25 @@ const BRIDGE_RESERVE_AUTHORITY_SEED = Buffer.from("bridge_reserve_authority");
 
 /** On-chain BridgeConfig account data */
 export interface BridgeConfig {
+  version: number;
   admin: PublicKey;
-  operator: PublicKey;
-  wrapperProgram: PublicKey;
-  sp1VerifierProgram: PublicKey;
   hyperlaneMailbox: PublicKey;
-  bridgeReserve: PublicKey;
+  sp1Verifier: PublicKey;
+  wrapperProgram: PublicKey;
+  wrapperConfig: PublicKey;
   usdcMint: PublicKey;
   wrapperMint: PublicKey;
-  allowedDomains: number[];
-  allowedEvmContracts: Uint8Array[];
+  bridgeUsdcReserve: PublicKey;
+  isPaused: boolean;
   totalBridgedIn: BN;
   totalBridgedOut: BN;
-  dailyVolume: BN;
-  dailyVolumeReset: BN;
-  isPaused: boolean;
-  nonceCounter: BN;
+  nonce: BN;
+  dailyInflowVolume: BN;
+  dailyInflowResetTimestamp: BN;
+  allowedEvmContracts: Uint8Array[];
+  supportedDomains: number[];
+  adminActionNonce: BN;
   bump: number;
-  version: number;
 }
 
 /** On-chain BridgeMessage account data */
@@ -278,15 +279,15 @@ export class BridgeClient {
     }
 
     const now = Math.floor(Date.now() / 1000);
-    const resetAt = config.dailyVolumeReset.toNumber();
+    const resetAt = config.dailyInflowResetTimestamp.toNumber();
 
     // If 24 hours have passed since last reset, full limit is available
     if (now >= resetAt + 86_400) {
-      return new BN("50000000000000"); // 50M USDC default
+      return new BN("5000000000000"); // 5M USDC (matching MAX_DAILY_BRIDGE_INFLOW)
     }
 
-    const dailyLimit = new BN("50000000000000");
-    const remaining = dailyLimit.sub(config.dailyVolume);
+    const dailyLimit = new BN("5000000000000"); // 5M USDC (6 decimals)
+    const remaining = dailyLimit.sub(config.dailyInflowVolume);
     return remaining.isNeg() ? new BN(0) : remaining;
   }
 
@@ -587,37 +588,76 @@ export class BridgeClient {
   // Private Helpers
   // --------------------------------------------------------------------------
 
-  /** Deserialize bridge config from raw account data */
+  /** Deserialize bridge config from raw account data
+   * Field order must match Rust struct:
+   * version, admin, hyperlane_mailbox, sp1_verifier, wrapper_program,
+   * wrapper_config, usdc_mint, wrapper_mint, bridge_usdc_reserve,
+   * is_paused, total_bridged_in, total_bridged_out, nonce,
+   * daily_inflow_volume, daily_inflow_reset_timestamp,
+   * allowed_evm_contracts, supported_domains, admin_action_nonce, bump, _reserved
+   */
   private deserializeBridgeConfig(data: Buffer): BridgeConfig {
     let offset = 8; // Skip Anchor discriminator
 
+    // version: u8
+    const version = data[offset];
+    offset += 1;
+
+    // admin: Pubkey
     const admin = new PublicKey(data.subarray(offset, offset + 32));
     offset += 32;
-    const operator = new PublicKey(data.subarray(offset, offset + 32));
-    offset += 32;
-    const wrapperProgram = new PublicKey(data.subarray(offset, offset + 32));
-    offset += 32;
-    const sp1VerifierProgram = new PublicKey(
-      data.subarray(offset, offset + 32)
-    );
-    offset += 32;
+
+    // hyperlane_mailbox: Pubkey
     const hyperlaneMailbox = new PublicKey(data.subarray(offset, offset + 32));
     offset += 32;
-    const bridgeReserve = new PublicKey(data.subarray(offset, offset + 32));
+
+    // sp1_verifier: Pubkey
+    const sp1Verifier = new PublicKey(data.subarray(offset, offset + 32));
     offset += 32;
+
+    // wrapper_program: Pubkey
+    const wrapperProgram = new PublicKey(data.subarray(offset, offset + 32));
+    offset += 32;
+
+    // wrapper_config: Pubkey
+    const wrapperConfig = new PublicKey(data.subarray(offset, offset + 32));
+    offset += 32;
+
+    // usdc_mint: Pubkey
     const usdcMint = new PublicKey(data.subarray(offset, offset + 32));
     offset += 32;
+
+    // wrapper_mint: Pubkey
     const wrapperMint = new PublicKey(data.subarray(offset, offset + 32));
     offset += 32;
 
-    // Vec<u32> allowed_domains
-    const domainsLen = data.readUInt32LE(offset);
-    offset += 4;
-    const allowedDomains: number[] = [];
-    for (let i = 0; i < domainsLen; i++) {
-      allowedDomains.push(data.readUInt32LE(offset));
-      offset += 4;
-    }
+    // bridge_usdc_reserve: Pubkey
+    const bridgeUsdcReserve = new PublicKey(data.subarray(offset, offset + 32));
+    offset += 32;
+
+    // is_paused: bool
+    const isPaused = data[offset] === 1;
+    offset += 1;
+
+    // total_bridged_in: u64
+    const totalBridgedIn = new BN(data.subarray(offset, offset + 8), "le");
+    offset += 8;
+
+    // total_bridged_out: u64
+    const totalBridgedOut = new BN(data.subarray(offset, offset + 8), "le");
+    offset += 8;
+
+    // nonce: u64
+    const nonce = new BN(data.subarray(offset, offset + 8), "le");
+    offset += 8;
+
+    // daily_inflow_volume: u64
+    const dailyInflowVolume = new BN(data.subarray(offset, offset + 8), "le");
+    offset += 8;
+
+    // daily_inflow_reset_timestamp: i64
+    const dailyInflowResetTimestamp = new BN(data.subarray(offset, offset + 8), "le");
+    offset += 8;
 
     // Vec<[u8; 20]> allowed_evm_contracts
     const contractsLen = data.readUInt32LE(offset);
@@ -630,42 +670,45 @@ export class BridgeClient {
       offset += 20;
     }
 
-    const totalBridgedIn = new BN(data.subarray(offset, offset + 8), "le");
+    // Vec<u32> supported_domains
+    const domainsLen = data.readUInt32LE(offset);
+    offset += 4;
+    const supportedDomains: number[] = [];
+    for (let i = 0; i < domainsLen; i++) {
+      supportedDomains.push(data.readUInt32LE(offset));
+      offset += 4;
+    }
+
+    // admin_action_nonce: u64
+    const adminActionNonce = new BN(data.subarray(offset, offset + 8), "le");
     offset += 8;
-    const totalBridgedOut = new BN(data.subarray(offset, offset + 8), "le");
-    offset += 8;
-    const dailyVolume = new BN(data.subarray(offset, offset + 8), "le");
-    offset += 8;
-    const dailyVolumeReset = new BN(data.subarray(offset, offset + 8), "le");
-    offset += 8;
-    const isPaused = data[offset] === 1;
-    offset += 1;
-    const nonceCounter = new BN(data.subarray(offset, offset + 8), "le");
-    offset += 8;
+
+    // bump: u8
     const bump = data[offset];
     offset += 1;
-    const version = data[offset];
-    offset += 1;
+
+    // _reserved: [u8; 56] - skip
 
     return {
+      version,
       admin,
-      operator,
-      wrapperProgram,
-      sp1VerifierProgram,
       hyperlaneMailbox,
-      bridgeReserve,
+      sp1Verifier,
+      wrapperProgram,
+      wrapperConfig,
       usdcMint,
       wrapperMint,
-      allowedDomains,
-      allowedEvmContracts,
+      bridgeUsdcReserve,
+      isPaused,
       totalBridgedIn,
       totalBridgedOut,
-      dailyVolume,
-      dailyVolumeReset,
-      isPaused,
-      nonceCounter,
+      nonce,
+      dailyInflowVolume,
+      dailyInflowResetTimestamp,
+      allowedEvmContracts,
+      supportedDomains,
+      adminActionNonce,
       bump,
-      version,
     };
   }
 

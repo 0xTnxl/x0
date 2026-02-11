@@ -84,11 +84,14 @@ pub struct BridgeConfig {
     /// Supported Hyperlane origin domain IDs
     pub supported_domains: Vec<u32>,
 
+    /// Monotonic nonce for timelocked admin actions
+    pub admin_action_nonce: u64,
+
     /// PDA bump seed
     pub bump: u8,
 
     /// Reserved space for future upgrades
-    pub _reserved: [u8; 64],
+    pub _reserved: [u8; 56],
 }
 
 impl BridgeConfig {
@@ -324,9 +327,13 @@ impl BridgeMessageBody {
     pub const ENCODED_SIZE: usize = 32 + 8 + 32 + 8; // 80 bytes
 
     /// Deserialize from big-endian encoded bytes (EVM format)
+    ///
+    /// # Security
+    /// Uses exact size check (==) to prevent trailing data from hiding
+    /// malicious payloads. Any extra bytes will cause an error.
     pub fn try_from_bytes(data: &[u8]) -> Result<Self> {
         require!(
-            data.len() >= Self::ENCODED_SIZE,
+            data.len() == Self::ENCODED_SIZE,
             x0_common::error::X0BridgeError::InvalidMessageBody
         );
 
@@ -383,4 +390,85 @@ pub struct SP1PublicInputs {
     pub success: bool,
     /// Extracted event logs
     pub event_logs: Vec<EVMEventLog>,
+}
+
+// ============================================================================
+// Bridge Admin Timelock
+// ============================================================================
+
+/// Type of timelocked bridge admin action
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq)]
+pub enum BridgeAdminActionType {
+    /// Add an EVM contract to the allowed list
+    AddEvmContract,
+    /// Remove an EVM contract from the allowed list
+    RemoveEvmContract,
+    /// Add a supported Hyperlane domain
+    AddDomain,
+    /// Remove a supported Hyperlane domain
+    RemoveDomain,
+    /// Update the SP1 verifier program (rare, requires careful review)
+    UpdateSp1Verifier,
+}
+
+/// A timelocked bridge admin action
+///
+/// Sensitive bridge operations require a 48-hour waiting period before
+/// execution. This gives token holders and users time to react to
+/// suspicious admin activity.
+///
+/// Note: Pause/unpause is NOT timelocked as it's needed for emergencies.
+///
+/// Seeds: ["bridge_admin_action", nonce.to_le_bytes()]
+#[account]
+#[derive(Debug)]
+pub struct BridgeAdminAction {
+    /// Nonce for unique action identification
+    pub nonce: u64,
+
+    /// Type of action
+    pub action_type: BridgeAdminActionType,
+
+    /// Scheduled execution timestamp (action can execute after this time)
+    pub scheduled_at: i64,
+
+    /// EVM contract address (for AddEvmContract/RemoveEvmContract)
+    pub evm_contract: [u8; EVM_ADDRESS_SIZE],
+
+    /// Domain ID (for AddDomain/RemoveDomain)
+    pub domain: u32,
+
+    /// New address value (for UpdateSp1Verifier, future use)
+    pub new_address: Pubkey,
+
+    /// Admin who scheduled this action
+    pub scheduled_by: Pubkey,
+
+    /// Whether this action has been executed
+    pub executed: bool,
+
+    /// Whether this action has been cancelled
+    pub cancelled: bool,
+
+    /// PDA bump seed
+    pub bump: u8,
+
+    /// Reserved for future use
+    pub _reserved: [u8; 32],
+}
+
+impl BridgeAdminAction {
+    pub const fn space() -> usize {
+        BRIDGE_ADMIN_ACTION_SIZE
+    }
+
+    /// Check if action is ready to execute (timelock expired)
+    pub fn is_ready(&self, current_timestamp: i64) -> bool {
+        !self.executed && !self.cancelled && current_timestamp >= self.scheduled_at
+    }
+
+    /// Check if action is still pending (not ready yet)
+    pub fn is_pending(&self, current_timestamp: i64) -> bool {
+        !self.executed && !self.cancelled && current_timestamp < self.scheduled_at
+    }
 }
