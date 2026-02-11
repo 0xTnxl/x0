@@ -5,9 +5,9 @@
 
 use alloy_primitives::{B256, U256};
 use alloy_provider::{Provider, ProviderBuilder};
-use alloy_rpc_types::{Block, BlockTransactionsKind, TransactionReceipt};
+use alloy_rpc_types::{Block, TransactionReceipt};
+use alloy_consensus::TxType;
 use anyhow::{anyhow, bail, Context, Result};
-use serde::{Deserialize, Serialize};
 use tiny_keccak::{Hasher, Keccak};
 use x0_sp1_common::EVMProofWitness;
 
@@ -46,15 +46,12 @@ pub async fn fetch_evm_artifacts(rpc_url: &str, tx_hash_hex: &str) -> Result<EVM
     // Fetch full block
     tracing::debug!("Fetching block {}", block_number);
     let block: Block = provider
-        .get_block_by_number(block_number.into(), BlockTransactionsKind::Full)
+        .get_block_by_number(block_number.into(), true)
         .await
         .context("Failed to fetch block")?
         .ok_or_else(|| anyhow!("Block not found: {}", block_number))?;
 
-    let block_hash = block
-        .header
-        .hash
-        .ok_or_else(|| anyhow!("Block has no hash"))?;
+    let block_hash = block.header.hash;
 
     // Fetch receipt
     tracing::debug!("Fetching receipt for {}", tx_hash_hex);
@@ -120,7 +117,7 @@ pub async fn fetch_evm_artifacts(rpc_url: &str, tx_hash_hex: &str) -> Result<EVM
 /// Uses `eth_getProof`-style approach or builds proofs from full block data.
 /// For Base/OP-stack chains, we fetch all transactions/receipts and build
 /// the trie locally.
-async fn construct_proofs<P: Provider>(
+async fn construct_proofs<P: Provider<T>, T: alloy_transport::Transport + Clone>(
     provider: &P,
     rpc_url: &str,
     block: &Block,
@@ -170,7 +167,7 @@ async fn construct_proofs<P: Provider>(
     // Build receipt trie and get proof
     // Fetch all receipts for the block
     let block_receipts = provider
-        .get_block_receipts(block.header.number.unwrap().into())
+        .get_block_receipts(block.header.number.into())
         .await
         .context("Failed to fetch block receipts")?
         .ok_or_else(|| anyhow!("Block receipts not found"))?;
@@ -185,6 +182,15 @@ async fn construct_proofs<P: Provider>(
         .get(tx_index as usize)
         .ok_or_else(|| anyhow!("Receipt index {} out of range", tx_index))?
         .clone();
+
+    // Sanity check: verify fetched receipt matches the one we already have
+    if block_receipts.get(tx_index as usize).map(|r| r.transaction_hash) 
+        != Some(receipt.transaction_hash) 
+    {
+        bail!(
+            "Receipt mismatch: fetched tx_hash differs from provided receipt"
+        );
+    }
 
     Ok((
         block_header_rlp,
@@ -205,16 +211,16 @@ fn rlp_encode_block_header(block: &Block) -> Result<Vec<u8>> {
 
     // Standard block header fields in order
     items.push(encode_bytes32(block.header.parent_hash.0));
-    items.push(encode_bytes32(block.header.ommers_hash.0));
-    items.push(encode_bytes20(block.header.beneficiary.0 .0));
+    items.push(encode_bytes32(block.header.uncles_hash.0));
+    items.push(encode_bytes20(block.header.miner.0 .0));
     items.push(encode_bytes32(block.header.state_root.0));
     items.push(encode_bytes32(block.header.transactions_root.0));
     items.push(encode_bytes32(block.header.receipts_root.0));
     items.push(encode_bytes(&block.header.logs_bloom.0 .0));
     items.push(encode_u256(block.header.difficulty));
-    items.push(encode_u64(block.header.number.unwrap_or(0)));
-    items.push(encode_u64(block.header.gas_limit));
-    items.push(encode_u64(block.header.gas_used));
+    items.push(encode_u64(block.header.number));
+    items.push(encode_u128(block.header.gas_limit));
+    items.push(encode_u128(block.header.gas_used));
     items.push(encode_u64(block.header.timestamp));
     items.push(encode_bytes(&block.header.extra_data));
     items.push(encode_bytes32(block.header.mix_hash.unwrap_or_default().0));
@@ -232,10 +238,10 @@ fn rlp_encode_block_header(block: &Block) -> Result<Vec<u8>> {
 
     // Post-Cancun
     if let Some(blob_gas_used) = block.header.blob_gas_used {
-        items.push(encode_u64(blob_gas_used));
+        items.push(encode_u128(blob_gas_used));
     }
     if let Some(excess_blob_gas) = block.header.excess_blob_gas {
-        items.push(encode_u64(excess_blob_gas));
+        items.push(encode_u128(excess_blob_gas));
     }
     if let Some(parent_beacon_root) = block.header.parent_beacon_block_root {
         items.push(encode_bytes32(parent_beacon_root.0));
@@ -478,11 +484,11 @@ fn rlp_encode_receipt(receipt: &TransactionReceipt) -> Result<Vec<u8>> {
     let status_byte = if receipt.status() { 1u8 } else { 0u8 };
     items.push(encode_u8(status_byte));
 
-    // Cumulative gas used
-    items.push(encode_u64(receipt.cumulative_gas_used));
+    // Cumulative gas used (accessed via inner)
+    items.push(encode_u128(receipt.inner.cumulative_gas_used()));
 
-    // Logs bloom
-    items.push(encode_bytes(&receipt.logs_bloom.0));
+    // Logs bloom (accessed via inner)
+    items.push(encode_bytes(receipt.inner.logs_bloom().as_slice()));
 
     // Logs
     let log_items: Vec<Vec<u8>> = receipt
@@ -513,8 +519,8 @@ fn rlp_encode_receipt(receipt: &TransactionReceipt) -> Result<Vec<u8>> {
 
     // For EIP-2718 typed receipts, prepend the type byte
     let tx_type = receipt.transaction_type();
-    if tx_type > 0 {
-        let mut typed = vec![tx_type];
+    if tx_type != TxType::Legacy {
+        let mut typed = vec![tx_type as u8];
         typed.extend_from_slice(&receipt_rlp);
         Ok(typed)
     } else {

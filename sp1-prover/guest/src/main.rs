@@ -84,7 +84,6 @@ pub fn main() {
     // ========================================================================
 
     let tx_key = rlp_encode_u32(witness.transaction_index);
-    let tx_leaf_hash = keccak256(&witness.transaction_rlp);
 
     assert!(
         verify_mpt_proof(
@@ -116,8 +115,6 @@ pub fn main() {
     // ========================================================================
     // Step 6: Parse receipt and verify success
     // ========================================================================
-
-    let receipt_items = rlp_decode_list(&witness.receipt_rlp);
 
     // For Type 2 (EIP-1559) transactions, the receipt is prefixed with 0x02
     // We handle both legacy and typed receipts
@@ -178,7 +175,6 @@ fn keccak256(data: &[u8]) -> [u8; 32] {
 /// Returns the byte ranges of each item in the list.
 fn rlp_decode_list(data: &[u8]) -> Vec<&[u8]> {
     let mut items = Vec::new();
-    let mut pos = 0;
 
     if data.is_empty() {
         return items;

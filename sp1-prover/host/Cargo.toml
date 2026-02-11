@@ -12,9 +12,11 @@ x0-sp1-common = { path = "../common" }
 sp1-sdk = "3.0"
 tokio = { version = "1", features = ["full"] }
 alloy-provider = { version = "0.3", features = ["reqwest"] }
+alloy-transport = "0.3"
 alloy-transport-http = "0.3"
 alloy-rpc-types = "0.3"
 alloy-primitives = "0.8"
+alloy-consensus = "0.3"
 alloy-rlp = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

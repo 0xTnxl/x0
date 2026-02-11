@@ -43,7 +43,7 @@ pub fn generate_proof(
     // Generate the proof
     let (pk, vk) = client.setup(EVM_VERIFIER_ELF);
     let proof = client
-        .prove(&pk, &stdin)
+        .prove(&pk, stdin)
         .compressed()
         .run()
         .context("SP1 proof generation failed")?;
@@ -80,14 +80,14 @@ pub fn generate_proof(
 pub fn generate_mock_proof(
     witness: &EVMProofWitness,
 ) -> Result<(Vec<u8>, EVMProofPublicInputs)> {
-    let client = ProverClient::builder().mock().build();
+    let client = ProverClient::mock();
 
     let mut stdin = SP1Stdin::new();
     stdin.write(witness);
 
     let (pk, _vk) = client.setup(EVM_VERIFIER_ELF);
     let proof = client
-        .prove(&pk, &stdin)
+        .prove(&pk, stdin)
         .run()
         .context("SP1 mock execution failed")?;
 
