@@ -115,14 +115,15 @@ contract X0LockContract is Ownable, Pausable, ReentrancyGuard {
     uint256 public nonce;
 
     /// @notice Minimum lock amount (in USDC base units, 6 decimals)
-    /// @dev Default: 1 USDC = 1_000_000
+    /// @dev Must match Solana MIN_BRIDGE_AMOUNT: 10 USDC = 10_000_000
     uint256 public minLockAmount;
 
     /// @notice Maximum lock amount per transaction (in USDC base units)
-    /// @dev Default: 10,000,000 USDC = 10_000_000_000_000
+    /// @dev Must match Solana MAX_BRIDGE_AMOUNT_PER_TX: 100,000 USDC = 100_000_000_000
     uint256 public maxLockAmount;
 
     /// @notice Daily volume limit (in USDC base units)
+    /// @dev Must match Solana MAX_DAILY_BRIDGE_INFLOW: 5,000,000 USDC = 5_000_000_000_000
     uint256 public dailyLimit;
 
     /// @notice Current daily volume
@@ -178,9 +179,10 @@ contract X0LockContract is Ownable, Pausable, ReentrancyGuard {
         solanaBridgeAddress = _solanaBridgeAddress;
 
         // Default limits (USDC has 6 decimals)
-        minLockAmount = 1_000_000;           // 1 USDC
-        maxLockAmount = 10_000_000_000_000;  // 10M USDC
-        dailyLimit = 50_000_000_000_000;     // 50M USDC
+        // Must match Solana x0-common constants
+        minLockAmount = 10_000_000;            // 10 USDC (MIN_BRIDGE_AMOUNT)
+        maxLockAmount = 100_000_000_000;       // 100K USDC (MAX_BRIDGE_AMOUNT_PER_TX)
+        dailyLimit = 5_000_000_000_000;        // 5M USDC (MAX_DAILY_BRIDGE_INFLOW)
         dailyVolumeResetAt = block.timestamp;
     }
 
@@ -226,12 +228,17 @@ contract X0LockContract is Ownable, Pausable, ReentrancyGuard {
         totalLocked += amount;
 
         // Encode message body for Solana x0-bridge handle_message
-        // Format: [solanaRecipient (32 bytes)][amount (u64 LE)][nonce (u64 LE)][evmSender (20 bytes)]
+        // Must match BridgeMessageBody::try_from_bytes() on Solana:
+        //   [0..32]   recipient:    Solana pubkey (32 bytes)
+        //   [32..40]  amount:       uint64 big-endian (USDC micro-units)
+        //   [40..72]  evm_tx_hash:  bytes32 (placeholder, will be set to lock tx hash by indexer)
+        //   [72..80]  nonce:        uint64 big-endian
+        // Total: 80 bytes (BridgeMessageBody::ENCODED_SIZE)
         bytes memory messageBody = abi.encodePacked(
             solanaRecipient,                    // 32 bytes
-            _toLE64(uint64(amount)),            // 8 bytes (little-endian for Solana)
-            _toLE64(uint64(lockNonce)),         // 8 bytes (little-endian for Solana)
-            bytes20(msg.sender)                 // 20 bytes
+            _toBE64(uint64(amount)),            // 8 bytes (big-endian for Solana decode)
+            bytes32(0),                         // 32 bytes (evm_tx_hash placeholder — populated post-inclusion)
+            _toBE64(uint64(lockNonce))          // 8 bytes (big-endian for Solana decode)
         );
 
         // Get required fee for Hyperlane dispatch
@@ -280,9 +287,9 @@ contract X0LockContract is Ownable, Pausable, ReentrancyGuard {
     ) external view returns (uint256 fee) {
         bytes memory messageBody = abi.encodePacked(
             solanaRecipient,
-            _toLE64(uint64(amount)),
-            _toLE64(uint64(nonce)),
-            bytes20(msg.sender)
+            _toBE64(uint64(amount)),
+            bytes32(0),
+            _toBE64(uint64(nonce))
         );
 
         fee = mailbox.quoteDispatch(
@@ -427,20 +434,9 @@ contract X0LockContract is Ownable, Pausable, ReentrancyGuard {
         dailyVolume = newVolume;
     }
 
-    /// @dev Convert uint64 to little-endian bytes (for Solana compatibility)
-    function _toLE64(uint64 value) internal pure returns (bytes8) {
-        return bytes8(
-            bytes8(uint64(
-                ((uint64(value) & 0xFF) << 56) |
-                ((uint64(value) & 0xFF00) << 40) |
-                ((uint64(value) & 0xFF0000) << 24) |
-                ((uint64(value) & 0xFF000000) << 8) |
-                ((uint64(value) & 0xFF00000000) >> 8) |
-                ((uint64(value) & 0xFF0000000000) >> 24) |
-                ((uint64(value) & 0xFF000000000000) >> 40) |
-                ((uint64(value) & 0xFF00000000000000) >> 56)
-            ))
-        );
+    /// @dev Convert uint64 to big-endian bytes (matching Solana u64::from_be_bytes)
+    function _toBE64(uint64 value) internal pure returns (bytes8) {
+        return bytes8(value);
     }
 
     /// @dev Allow contract to receive ETH (for Hyperlane fee refunds)

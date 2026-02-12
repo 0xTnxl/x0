@@ -1,0 +1,23 @@
+# Compiler output
+out/
+cache/
+
+# Dependencies
+lib/
+
+# Environment
+.env
+.env.*
+
+# Coverage
+lcov.info
+coverage/
+
+# Broadcast logs
+broadcast/
+
+# Docs
+docs/
+
+# OS
+.DS_Store

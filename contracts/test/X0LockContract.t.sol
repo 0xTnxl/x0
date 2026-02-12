@@ -123,14 +123,14 @@ contract X0LockContractTest is Test {
 
     /// @dev Test minimum amount enforcement
     function test_lock_reverts_below_minimum() public {
-        uint256 amount = 999_999; // < 1 USDC
+        uint256 amount = 9_999_999; // < 10 USDC
 
         vm.prank(user);
         vm.expectRevert(
             abi.encodeWithSelector(
                 X0LockContract.AmountTooSmall.selector,
                 amount,
-                1_000_000
+                10_000_000
             )
         );
         lockContract.lock{value: 0.01 ether}(amount, solanaRecipient);
@@ -138,7 +138,7 @@ contract X0LockContractTest is Test {
 
     /// @dev Test maximum amount enforcement
     function test_lock_reverts_above_maximum() public {
-        uint256 amount = 10_000_001_000_000; // > 10M USDC
+        uint256 amount = 100_000_000_001; // > 100K USDC
 
         usdc.mint(user, amount);
         vm.prank(user);
@@ -149,7 +149,7 @@ contract X0LockContractTest is Test {
             abi.encodeWithSelector(
                 X0LockContract.AmountTooLarge.selector,
                 amount,
-                10_000_000_000_000
+                100_000_000_000
             )
         );
         lockContract.lock{value: 0.01 ether}(amount, solanaRecipient);
@@ -159,7 +159,7 @@ contract X0LockContractTest is Test {
     function test_lock_reverts_zero_recipient() public {
         vm.prank(user);
         vm.expectRevert(X0LockContract.InvalidSolanaRecipient.selector);
-        lockContract.lock{value: 0.01 ether}(1_000_000, bytes32(0));
+        lockContract.lock{value: 0.01 ether}(10_000_000, bytes32(0));
     }
 
     /// @dev Test pause prevents locking
@@ -218,9 +218,9 @@ contract X0LockContractTest is Test {
     function test_sequential_nonces() public {
         vm.startPrank(user);
 
-        (, uint256 n0) = lockContract.lock{value: 0.01 ether}(1_000_000, solanaRecipient);
-        (, uint256 n1) = lockContract.lock{value: 0.01 ether}(2_000_000, solanaRecipient);
-        (, uint256 n2) = lockContract.lock{value: 0.01 ether}(3_000_000, solanaRecipient);
+        (, uint256 n0) = lockContract.lock{value: 0.01 ether}(10_000_000, solanaRecipient);
+        (, uint256 n1) = lockContract.lock{value: 0.01 ether}(20_000_000, solanaRecipient);
+        (, uint256 n2) = lockContract.lock{value: 0.01 ether}(30_000_000, solanaRecipient);
 
         vm.stopPrank();
 
