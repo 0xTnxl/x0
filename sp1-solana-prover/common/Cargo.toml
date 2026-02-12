@@ -1,0 +1,12 @@
+[package]
+name = "x0-sp1-solana-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Shared types between SP1 guest and host for x0 Solana state proofs (outbound bridge)"
+
+[dependencies]
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+borsh = { version = "0.10", default-features = false }

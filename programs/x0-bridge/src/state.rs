@@ -97,8 +97,17 @@ pub struct BridgeConfig {
     /// PDA bump seed
     pub bump: u8,
 
-    /// Reserved space for future upgrades
-    pub _reserved: [u8; 56],
+    /// Monotonic nonce for outbound bridge messages (Solana → Base)
+    pub bridge_out_nonce: u64,
+
+    /// Rolling daily outflow volume for rate limiting
+    pub daily_outflow_volume: u64,
+
+    /// Timestamp when daily outflow counter was last reset
+    pub daily_outflow_reset_timestamp: i64,
+
+    /// Reserved space for future upgrades (56 - 24 = 32 bytes remaining)
+    pub _reserved: [u8; 32],
 }
 
 impl BridgeConfig {
@@ -171,6 +180,13 @@ impl BridgeConfig {
         if current_timestamp - self.daily_inflow_reset_timestamp >= ROLLING_WINDOW_SECONDS {
             self.daily_inflow_volume = 0;
             self.daily_inflow_reset_timestamp = current_timestamp;
+        }
+    }
+    /// Reset daily outflow counter if 24 hours have passed
+    pub fn maybe_reset_daily_outflow_counter(&mut self, current_timestamp: i64) {
+        if current_timestamp - self.daily_outflow_reset_timestamp >= ROLLING_WINDOW_SECONDS {
+            self.daily_outflow_volume = 0;
+            self.daily_outflow_reset_timestamp = current_timestamp;
         }
     }
 }
@@ -527,5 +543,139 @@ impl BridgeAdminAction {
     /// Check if action is still pending (not ready yet)
     pub fn is_pending(&self, current_timestamp: i64) -> bool {
         !self.executed && !self.cancelled && current_timestamp < self.scheduled_at
+    }
+}
+
+// ============================================================================
+// Outbound Bridge (Solana → Base)
+// ============================================================================
+
+/// Status of an outbound bridge message
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq, Eq)]
+pub enum BridgeOutStatus {
+    /// x0-USD has been burned on Solana, awaiting USDC unlock on Base
+    Burned,
+    /// USDC has been unlocked on Base (terminal success — set off-chain or via future instruction)
+    Unlocked,
+    /// Bridge out failed (terminal failure state)
+    Failed,
+}
+
+impl Default for BridgeOutStatus {
+    fn default() -> Self {
+        Self::Burned
+    }
+}
+
+/// An outbound bridge message recording a burn of x0-USD on Solana
+///
+/// Created by `initiate_bridge_out`. The off-chain SP1 Solana prover
+/// reads this PDA's data to generate a STARK proof that the X0UnlockContract
+/// on Base verifies before releasing USDC.
+///
+/// Seeds: ["bridge_out_message", nonce.to_le_bytes()]
+#[account]
+#[derive(Debug)]
+pub struct BridgeOutMessage {
+    /// Account version for future migrations
+    pub version: u8,
+
+    /// Monotonic nonce (from BridgeConfig.bridge_out_nonce at time of burn)
+    pub nonce: u64,
+
+    /// Solana address that burned x0-USD
+    pub solana_sender: Pubkey,
+
+    /// EVM recipient address on Base (20 bytes)
+    pub evm_recipient: [u8; EVM_ADDRESS_SIZE],
+
+    /// Amount of x0-USD burned (USDC micro-units, 6 decimals)
+    pub amount: u64,
+
+    /// Solana transaction signature of the burn (first 32 bytes)
+    pub burn_tx_signature: [u8; 32],
+
+    /// Unix timestamp when burn occurred
+    pub burned_at: i64,
+
+    /// Current status
+    pub status: BridgeOutStatus,
+
+    /// PDA bump seed
+    pub bump: u8,
+
+    /// Reserved space for future upgrades
+    pub _reserved: [u8; 32],
+}
+
+impl BridgeOutMessage {
+    pub const fn space() -> usize {
+        BRIDGE_OUT_MESSAGE_SIZE
+    }
+}
+
+/// Message body format for outbound bridge (Solana → Base)
+///
+/// This is the canonical encoding that the SP1 Solana prover commits
+/// and the X0UnlockContract on Base verifies.
+///
+/// Layout (packed, big-endian for EVM compatibility):
+///   [0..20]   evm_recipient:  Base address (20 bytes)
+///   [20..28]  amount:         uint64 big-endian (USDC micro-units)
+///   [28..60]  burn_tx_sig:    bytes32 (Solana tx signature, first 32 bytes)
+///   [60..68]  nonce:          uint64 big-endian (bridge_out_nonce)
+#[derive(Clone, Debug)]
+pub struct BridgeOutMessageBody {
+    /// EVM recipient address on Base
+    pub evm_recipient: [u8; EVM_ADDRESS_SIZE],
+    /// Amount in USDC micro-units (6 decimals)
+    pub amount: u64,
+    /// Solana burn transaction signature (first 32 bytes)
+    pub burn_tx_signature: [u8; 32],
+    /// Outbound nonce
+    pub nonce: u64,
+}
+
+impl BridgeOutMessageBody {
+    /// Expected size of the serialized message body
+    pub const ENCODED_SIZE: usize = 20 + 8 + 32 + 8; // 68 bytes
+
+    /// Serialize to big-endian encoded bytes (EVM-compatible format)
+    pub fn to_bytes(&self) -> [u8; Self::ENCODED_SIZE] {
+        let mut buf = [0u8; Self::ENCODED_SIZE];
+        buf[0..20].copy_from_slice(&self.evm_recipient);
+        buf[20..28].copy_from_slice(&self.amount.to_be_bytes());
+        buf[28..60].copy_from_slice(&self.burn_tx_signature);
+        buf[60..68].copy_from_slice(&self.nonce.to_be_bytes());
+        buf
+    }
+
+    /// Deserialize from big-endian encoded bytes
+    pub fn try_from_bytes(data: &[u8]) -> Result<Self> {
+        require!(
+            data.len() == Self::ENCODED_SIZE,
+            x0_common::error::X0BridgeError::InvalidMessageBody
+        );
+
+        let mut evm_recipient = [0u8; EVM_ADDRESS_SIZE];
+        evm_recipient.copy_from_slice(&data[0..20]);
+
+        let mut amount_bytes = [0u8; 8];
+        amount_bytes.copy_from_slice(&data[20..28]);
+        let amount = u64::from_be_bytes(amount_bytes);
+
+        let mut burn_tx_signature = [0u8; 32];
+        burn_tx_signature.copy_from_slice(&data[28..60]);
+
+        let mut nonce_bytes = [0u8; 8];
+        nonce_bytes.copy_from_slice(&data[60..68]);
+        let nonce = u64::from_be_bytes(nonce_bytes);
+
+        Ok(Self {
+            evm_recipient,
+            amount,
+            burn_tx_signature,
+            nonce,
+        })
     }
 }

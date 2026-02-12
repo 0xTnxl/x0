@@ -56,6 +56,7 @@ const EVM_PROOF_CONTEXT_SEED = Buffer.from("evm_proof");
 const BRIDGE_RESERVE_SEED = Buffer.from("bridge_reserve");
 const BRIDGE_RESERVE_AUTHORITY_SEED = Buffer.from("bridge_reserve_authority");
 const BRIDGE_ADMIN_ACTION_SEED = Buffer.from("bridge_admin_action");
+const BRIDGE_OUT_MESSAGE_SEED = Buffer.from("bridge_out_message");
 
 // ============================================================================
 // Types
@@ -82,6 +83,10 @@ export interface BridgeConfig {
   supportedDomains: number[];
   adminActionNonce: BN;
   bump: number;
+  // --- Outbound bridge fields (Solana → Base) ---
+  bridgeOutNonce: BN;
+  dailyOutflowVolume: BN;
+  dailyOutflowResetTimestamp: BN;
 }
 
 /**
@@ -111,6 +116,33 @@ export enum BridgeMessageStatus {
   ProofVerified = 1,
   Minted = 2,
   Failed = 3,
+}
+
+/** Status of an outbound bridge message (Solana → Base) */
+export enum BridgeOutStatus {
+  Burned = 0,
+  Unlocked = 1,
+  Failed = 2,
+}
+
+/**
+ * On-chain BridgeOutMessage account data
+ *
+ * Field order matches Rust struct:
+ *   version, nonce, solana_sender, evm_recipient([u8;20]),
+ *   amount, burn_tx_signature([u8;32]), burned_at,
+ *   status, bump, _reserved
+ */
+export interface BridgeOutMessage {
+  version: number;
+  nonce: BN;
+  solanaSender: PublicKey;
+  evmRecipient: Uint8Array; // 20 bytes
+  amount: BN;
+  burnTxSignature: Uint8Array; // 32 bytes
+  burnedAt: BN;
+  status: BridgeOutStatus;
+  bump: number;
 }
 
 /**
@@ -197,6 +229,35 @@ export interface ReplenishReserveParams {
   amount: BN;
   depositor: PublicKey;
   depositorUsdcAccount: PublicKey;
+}
+
+/**
+ * Parameters for initiating a bridge out (Solana → Base).
+ *
+ * Burns x0-USD on Solana and creates a BridgeOutMessage PDA for
+ * off-chain SP1 proof generation and USDC unlock on Base.
+ */
+export interface InitiateBridgeOutParams {
+  /** User initiating the bridge out (signer) */
+  user: PublicKey;
+  /** EVM recipient address (20 bytes) */
+  evmRecipient: Uint8Array;
+  /** Amount of x0-USD to burn (USDC 6 decimals) */
+  amount: BN;
+  /** USDC mint address on Solana */
+  usdcMint: PublicKey;
+  /** x0-USD wrapper mint address (Token-2022) */
+  wrapperMint: PublicKey;
+  /** x0-wrapper config PDA */
+  wrapperConfig: PublicKey;
+  /** x0-wrapper stats PDA */
+  wrapperStats: PublicKey;
+  /** x0-wrapper USDC reserve token account */
+  wrapperReserveAccount: PublicKey;
+  /** x0-wrapper reserve authority PDA */
+  wrapperReserveAuthority: PublicKey;
+  /** Token program for USDC (defaults to TOKEN_PROGRAM_ID) */
+  usdcTokenProgram?: PublicKey;
 }
 
 /** Parameters for scheduling a timelocked admin action */
@@ -314,6 +375,16 @@ export class BridgeClient {
     );
   }
 
+  /** Derive the BridgeOutMessage PDA for a given outbound nonce */
+  deriveBridgeOutMessagePda(nonce: BN): [PublicKey, number] {
+    const nonceBuf = Buffer.alloc(8);
+    nonceBuf.writeBigUInt64LE(BigInt(nonce.toString()), 0);
+    return PublicKey.findProgramAddressSync(
+      [BRIDGE_OUT_MESSAGE_SEED, nonceBuf],
+      this.programId
+    );
+  }
+
   // --------------------------------------------------------------------------
   // Account Fetching
   // --------------------------------------------------------------------------
@@ -344,6 +415,14 @@ export class BridgeClient {
     return this.deserializeEVMProofContext(accountInfo.data);
   }
 
+  /** Fetch and deserialize a BridgeOutMessage account by nonce */
+  async fetchBridgeOutMessage(nonce: BN): Promise<BridgeOutMessage | null> {
+    const [messagePda] = this.deriveBridgeOutMessagePda(nonce);
+    const accountInfo = await this.connection.getAccountInfo(messagePda);
+    if (!accountInfo) return null;
+    return this.deserializeBridgeOutMessage(accountInfo.data);
+  }
+
   /** Check if the bridge is currently paused */
   async isPaused(): Promise<boolean> {
     const config = await this.fetchConfig();
@@ -365,6 +444,23 @@ export class BridgeClient {
 
     const dailyLimit = new BN("5000000000000"); // 5M USDC (6 decimals)
     const remaining = dailyLimit.sub(config.dailyInflowVolume);
+    return remaining.isNeg() ? new BN(0) : remaining;
+  }
+
+  /** Get remaining daily outbound volume capacity */
+  async remainingDailyOutflowVolume(): Promise<BN> {
+    const config = await this.fetchConfig();
+    if (!config) return new BN(0);
+
+    const now = Math.floor(Date.now() / 1000);
+    const resetAt = config.dailyOutflowResetTimestamp.toNumber();
+
+    if (now >= resetAt + 86_400) {
+      return new BN("5000000000000"); // MAX_DAILY_BRIDGE_OUTFLOW (5M USDC)
+    }
+
+    const dailyLimit = new BN("5000000000000");
+    const remaining = dailyLimit.sub(config.dailyOutflowVolume);
     return remaining.isNeg() ? new BN(0) : remaining;
   }
 
@@ -646,6 +742,85 @@ export class BridgeClient {
       { pubkey: params.depositorUsdcAccount, isSigner: false, isWritable: true },
       { pubkey: bridgeReserve, isSigner: false, isWritable: true },
       { pubkey: usdcTokenProgram, isSigner: false, isWritable: false },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data,
+    });
+  }
+
+  /**
+   * Build the initiate_bridge_out instruction.
+   *
+   * Burns x0-USD on Solana and creates a BridgeOutMessage PDA for
+   * off-chain SP1 Solana proof generation and USDC unlock on Base.
+   *
+   * On-chain accounts (in order):
+   *   user(signer,mut), config(mut), bridge_out_message(init,mut),
+   *   bridge_usdc_reserve(mut), bridge_reserve_authority,
+   *   wrapper_config, wrapper_stats(mut), usdc_mint,
+   *   wrapper_mint(mut), user_wrapper_account(mut),
+   *   wrapper_reserve_account(mut), wrapper_reserve_authority,
+   *   wrapper_program, token_2022_program, usdc_token_program,
+   *   system_program
+   *
+   * On-chain args: evm_recipient([u8;20]), amount(u64)
+   *
+   * @param params - Bridge out parameters
+   * @param currentBridgeOutNonce - The current config.bridgeOutNonce
+   *   (read from fetchConfig before calling). The PDA is derived
+   *   from this nonce.
+   */
+  buildInitiateBridgeOutInstruction(
+    params: InitiateBridgeOutParams,
+    currentBridgeOutNonce: BN,
+  ): TransactionInstruction {
+    const [configPda] = this.deriveConfigPda();
+    const [bridgeOutMessagePda] = this.deriveBridgeOutMessagePda(currentBridgeOutNonce);
+    const [bridgeReserve] = this.deriveReservePda(params.usdcMint);
+    const [reserveAuthority] = this.deriveReserveAuthorityPda();
+
+    // User's x0-USD ATA (Token-2022)
+    const userWrapperAccount = getAssociatedTokenAddressSync(
+      params.wrapperMint,
+      params.user,
+      false,
+      TOKEN_2022_PROGRAM_ID
+    );
+
+    const discriminator = getInstructionDiscriminator("initiate_bridge_out");
+
+    // Serialize args: evm_recipient([u8;20]) + amount(u64 LE)
+    const amountBuf = Buffer.alloc(8);
+    amountBuf.writeBigUInt64LE(BigInt(params.amount.toString()), 0);
+    const data = Buffer.concat([
+      discriminator,
+      Buffer.from(params.evmRecipient),
+      amountBuf,
+    ]);
+
+    const usdcTokenProgram = params.usdcTokenProgram ?? TOKEN_PROGRAM_ID;
+
+    // Account order matches InitiateBridgeOut<'info> struct
+    const keys = [
+      { pubkey: params.user, isSigner: true, isWritable: true },
+      { pubkey: configPda, isSigner: false, isWritable: true },
+      { pubkey: bridgeOutMessagePda, isSigner: false, isWritable: true },
+      { pubkey: bridgeReserve, isSigner: false, isWritable: true },
+      { pubkey: reserveAuthority, isSigner: false, isWritable: false },
+      { pubkey: params.wrapperConfig, isSigner: false, isWritable: false },
+      { pubkey: params.wrapperStats, isSigner: false, isWritable: true },
+      { pubkey: params.usdcMint, isSigner: false, isWritable: false },
+      { pubkey: params.wrapperMint, isSigner: false, isWritable: true },
+      { pubkey: userWrapperAccount, isSigner: false, isWritable: true },
+      { pubkey: params.wrapperReserveAccount, isSigner: false, isWritable: true },
+      { pubkey: params.wrapperReserveAuthority, isSigner: false, isWritable: false },
+      { pubkey: X0_WRAPPER_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: TOKEN_2022_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: usdcTokenProgram, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ];
 
     return new TransactionInstruction({
@@ -1119,7 +1294,12 @@ export class BridgeClient {
 
     const adminActionNonce = new BN(data.subarray(offset, offset + 8), "le"); offset += 8;
     const bump = data[offset]; offset += 1;
-    // _reserved: [u8; 56] — skip
+
+    // Outbound bridge fields (consumed from former _reserved space)
+    const bridgeOutNonce = new BN(data.subarray(offset, offset + 8), "le"); offset += 8;
+    const dailyOutflowVolume = new BN(data.subarray(offset, offset + 8), "le"); offset += 8;
+    const dailyOutflowResetTimestamp = new BN(data.subarray(offset, offset + 8), "le"); offset += 8;
+    // _reserved: [u8; 32] — skip
 
     return {
       version, admin, hyperlaneMailbox, sp1Verifier,
@@ -1127,6 +1307,7 @@ export class BridgeClient {
       bridgeUsdcReserve, isPaused, totalBridgedIn, totalBridgedOut,
       nonce, dailyInflowVolume, dailyInflowResetTimestamp,
       allowedEvmContracts, supportedDomains, adminActionNonce, bump,
+      bridgeOutNonce, dailyOutflowVolume, dailyOutflowResetTimestamp,
     };
   }
 
@@ -1218,6 +1399,34 @@ export class BridgeClient {
       version, proofType, verified, verifiedAt,
       blockHash, blockNumber, txHash, from, to, value,
       eventLogs, messageId, bump,
+    };
+  }
+
+  /**
+   * Deserialize BridgeOutMessage from raw account data.
+   *
+   * Field order matches Rust struct:
+   *   version(u8), nonce(u64), solana_sender(Pubkey),
+   *   evm_recipient([u8;20]), amount(u64), burn_tx_signature([u8;32]),
+   *   burned_at(i64), status(enum u8), bump(u8), _reserved([u8;32])
+   */
+  private deserializeBridgeOutMessage(data: Buffer): BridgeOutMessage {
+    let offset = 8; // Skip Anchor discriminator
+
+    const version = data[offset]; offset += 1;
+    const nonce = new BN(data.subarray(offset, offset + 8), "le"); offset += 8;
+    const solanaSender = new PublicKey(data.subarray(offset, offset + 32)); offset += 32;
+    const evmRecipient = new Uint8Array(data.subarray(offset, offset + 20)); offset += 20;
+    const amount = new BN(data.subarray(offset, offset + 8), "le"); offset += 8;
+    const burnTxSignature = new Uint8Array(data.subarray(offset, offset + 32)); offset += 32;
+    const burnedAt = new BN(data.subarray(offset, offset + 8), "le"); offset += 8;
+    const status: BridgeOutStatus = data[offset]; offset += 1;
+    const bump = data[offset]; offset += 1;
+    // _reserved: [u8; 32] — skip
+
+    return {
+      version, nonce, solanaSender, evmRecipient,
+      amount, burnTxSignature, burnedAt, status, bump,
     };
   }
 }

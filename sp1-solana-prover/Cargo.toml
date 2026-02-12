@@ -1,0 +1,10 @@
+[workspace]
+members = ["common", "guest", "host"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/x0-protocol/x0-01"
+authors = ["x0 Protocol Core Team <team@x0protocol.dev>"]

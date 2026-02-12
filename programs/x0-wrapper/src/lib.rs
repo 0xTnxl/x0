@@ -95,6 +95,19 @@ pub mod x0_wrapper {
         instructions::bridge_mint::handler(ctx, amount)
     }
 
+    /// Burn x0-USD for outbound bridge (CPI from x0-bridge only)
+    ///
+    /// Burns x0-USD from the user and transfers USDC from the wrapper
+    /// reserve to the bridge's USDC reserve. This is the inverse of
+    /// bridge_mint, used during Solana → Base bridging.
+    /// Only callable by the whitelisted bridge_program in WrapperConfig.
+    pub fn bridge_burn(
+        ctx: Context<BridgeBurn>,
+        amount: u64,
+    ) -> Result<()> {
+        instructions::bridge_burn::handler(ctx, amount)
+    }
+
     /// Set the authorized bridge program address (admin only)
     ///
     /// Set to Pubkey::default() to disable bridge minting.

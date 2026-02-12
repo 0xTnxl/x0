@@ -186,7 +186,10 @@ pub fn handler(
     config.supported_domains = domains_arr;
     config.admin_action_nonce = 0;
     config.bump = ctx.bumps.config;
-    config._reserved = [0u8; 56];
+    config.bridge_out_nonce = 0;
+    config.daily_outflow_volume = 0;
+    config.daily_outflow_reset_timestamp = clock.unix_timestamp;
+    config._reserved = [0u8; 32];
 
     emit!(BridgeInitialized {
         config: config.key(),

@@ -542,11 +542,46 @@ pub const BRIDGE_CONFIG_SIZE: usize = 8 + // discriminator
     (MAX_SUPPORTED_DOMAINS * 4) + // supported_domains (fixed array)
     8 +  // admin_action_nonce
     1 +  // bump
-    56;  // reserved
+    8 +  // bridge_out_nonce (outbound monotonic nonce)
+    8 +  // daily_outflow_volume (rolling outbound rate limiting)
+    8 +  // daily_outflow_reset_timestamp
+    32;  // reserved (56 - 24 = 32 bytes remaining)
 
 /// Circuit breaker threshold (100M USDC with 6 decimals)
 /// If total_bridged_in exceeds this, bridge auto-pauses
 pub const BRIDGE_CIRCUIT_BREAKER_THRESHOLD: u64 = 100_000_000_000_000;
+
+// ============================================================================
+// Outbound Bridge (Solana → Base) Constants
+// ============================================================================
+
+/// Seed prefix for BridgeOutMessage PDA
+pub const BRIDGE_OUT_MESSAGE_SEED: &[u8] = b"bridge_out_message";
+
+/// Maximum USDC that can be bridged out per transaction (same as inbound)
+pub const MAX_BRIDGE_OUT_AMOUNT_PER_TX: u64 = MAX_BRIDGE_AMOUNT_PER_TX;
+
+/// Minimum USDC that can be bridged out per transaction (same as inbound)
+pub const MIN_BRIDGE_OUT_AMOUNT: u64 = MIN_BRIDGE_AMOUNT;
+
+/// Maximum daily outflow volume (5M USDC with 6 decimals, matching inflow)
+pub const MAX_DAILY_BRIDGE_OUTFLOW: u64 = 5_000_000_000_000;
+
+/// Circuit breaker threshold for outbound (100M USDC with 6 decimals)
+pub const BRIDGE_OUT_CIRCUIT_BREAKER_THRESHOLD: u64 = 100_000_000_000_000;
+
+/// BridgeOutMessage account size
+pub const BRIDGE_OUT_MESSAGE_SIZE: usize = 8 + // discriminator
+    1 +  // version
+    8 +  // nonce (monotonic bridge_out_nonce from BridgeConfig)
+    32 + // solana_sender
+    20 + // evm_recipient (Base address)
+    8 +  // amount (USDC micro-units)
+    32 + // burn_tx_signature (Solana tx sig)
+    8 +  // burned_at timestamp
+    1 +  // status (Burned / Unlocked / Failed)
+    1 +  // bump
+    32;  // reserved
 
 /// Hyperlane PDA seed components (must match Hyperlane Sealevel programs)
 pub const HYPERLANE_SEED: &[u8] = b"hyperlane";

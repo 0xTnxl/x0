@@ -98,10 +98,10 @@ contract X0LockContract is Ownable, Pausable, ReentrancyGuard {
     // ========================================================================
 
     /// @notice USDC token contract (6 decimals on Base)
-    IERC20 public immutable usdc;
+    IERC20 public immutable USDC;
 
     /// @notice Hyperlane Mailbox contract for dispatching cross-chain messages
-    IMailbox public immutable mailbox;
+    IMailbox public immutable MAILBOX;
 
     /// @notice Solana destination domain ID in Hyperlane
     /// @dev Solana mainnet = 1399811149, devnet may differ
@@ -173,8 +173,8 @@ contract X0LockContract is Ownable, Pausable, ReentrancyGuard {
         if (_mailbox == address(0)) revert ZeroAddress();
         if (_solanaBridgeAddress == bytes32(0)) revert InvalidSolanaRecipient();
 
-        usdc = IERC20(_usdc);
-        mailbox = IMailbox(_mailbox);
+        USDC = IERC20(_usdc);
+        MAILBOX = IMailbox(_mailbox);
         solanaDomain = _solanaDomain;
         solanaBridgeAddress = _solanaBridgeAddress;
 
@@ -224,7 +224,7 @@ contract X0LockContract is Ownable, Pausable, ReentrancyGuard {
         nonce += 1;
 
         // Transfer USDC from user to this contract
-        usdc.safeTransferFrom(msg.sender, address(this), amount);
+        USDC.safeTransferFrom(msg.sender, address(this), amount);
         totalLocked += amount;
 
         // Encode message body for Solana x0-bridge handle_message
@@ -236,13 +236,15 @@ contract X0LockContract is Ownable, Pausable, ReentrancyGuard {
         // Total: 80 bytes (BridgeMessageBody::ENCODED_SIZE)
         bytes memory messageBody = abi.encodePacked(
             solanaRecipient,                    // 32 bytes
-            _toBE64(uint64(amount)),            // 8 bytes (big-endian for Solana decode)
+            // forge-lint: disable-next-line(unsafe-typecast)
+            _toBe64(uint64(amount)),            // 8 bytes (big-endian for Solana decode)
             bytes32(0),                         // 32 bytes (evm_tx_hash placeholder — populated post-inclusion)
-            _toBE64(uint64(lockNonce))          // 8 bytes (big-endian for Solana decode)
+            // forge-lint: disable-next-line(unsafe-typecast)
+            _toBe64(uint64(lockNonce))          // 8 bytes (big-endian for Solana decode)
         );
 
         // Get required fee for Hyperlane dispatch
-        uint256 fee = mailbox.quoteDispatch(
+        uint256 fee = MAILBOX.quoteDispatch(
             solanaDomain,
             solanaBridgeAddress,
             messageBody
@@ -252,7 +254,7 @@ contract X0LockContract is Ownable, Pausable, ReentrancyGuard {
         }
 
         // Dispatch message via Hyperlane
-        messageId = mailbox.dispatch{value: fee}(
+        messageId = MAILBOX.dispatch{value: fee}(
             solanaDomain,
             solanaBridgeAddress,
             messageBody
@@ -287,12 +289,14 @@ contract X0LockContract is Ownable, Pausable, ReentrancyGuard {
     ) external view returns (uint256 fee) {
         bytes memory messageBody = abi.encodePacked(
             solanaRecipient,
-            _toBE64(uint64(amount)),
+            // forge-lint: disable-next-line(unsafe-typecast)
+            _toBe64(uint64(amount)),
             bytes32(0),
-            _toBE64(uint64(nonce))
+            // forge-lint: disable-next-line(unsafe-typecast)
+            _toBe64(uint64(nonce))
         );
 
-        fee = mailbox.quoteDispatch(
+        fee = MAILBOX.quoteDispatch(
             solanaDomain,
             solanaBridgeAddress,
             messageBody
@@ -318,7 +322,7 @@ contract X0LockContract is Ownable, Pausable, ReentrancyGuard {
         record.unlocked = true;
         totalUnlocked += record.amount;
 
-        usdc.safeTransfer(record.sender, record.amount);
+        USDC.safeTransfer(record.sender, record.amount);
 
         emit Unlocked(record.sender, record.amount, lockNonce);
     }
@@ -326,7 +330,7 @@ contract X0LockContract is Ownable, Pausable, ReentrancyGuard {
     /// @notice Withdraw excess funds (accumulated ETH fees, etc.)
     /// @param to Recipient address
     /// @param amount Amount to withdraw
-    function adminWithdrawETH(address to, uint256 amount) external onlyOwner {
+    function adminWithdrawEth(address to, uint256 amount) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
         (bool success, ) = to.call{value: amount}("");
         require(success, "ETH withdrawal failed");
@@ -435,7 +439,7 @@ contract X0LockContract is Ownable, Pausable, ReentrancyGuard {
     }
 
     /// @dev Convert uint64 to big-endian bytes (matching Solana u64::from_be_bytes)
-    function _toBE64(uint64 value) internal pure returns (bytes8) {
+    function _toBe64(uint64 value) internal pure returns (bytes8) {
         return bytes8(value);
     }
 

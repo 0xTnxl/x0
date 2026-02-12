@@ -1,0 +1,19 @@
+[package]
+name = "x0-sp1-solana-guest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "SP1 guest program: Solana state proof circuit for x0 outbound bridge"
+
+# SP1 guest programs must be built as binaries
+[[bin]]
+name = "solana-state-verifier"
+path = "src/main.rs"
+
+[dependencies]
+x0-sp1-solana-common = { path = "../common" }
+sp1-zkvm = "3.0"
+borsh = { version = "0.10", default-features = false }
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }

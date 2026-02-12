@@ -759,3 +759,69 @@ pub struct BridgeCircuitBreakerTriggered {
     /// Unix timestamp
     pub timestamp: i64,
 }
+
+// ============================================================================
+// Outbound Bridge Events (Solana → Base)
+// ============================================================================
+
+/// Emitted when a user initiates a bridge-out (burns x0-USD on Solana)
+#[event]
+pub struct BridgeOutInitiated {
+    /// BridgeOutMessage PDA
+    pub message_pda: Pubkey,
+    /// Monotonic outbound nonce
+    pub nonce: u64,
+    /// Solana sender who burned x0-USD
+    pub solana_sender: Pubkey,
+    /// EVM recipient address on Base (20 bytes)
+    pub evm_recipient: [u8; 20],
+    /// Amount of x0-USD burned (USDC micro-units)
+    pub amount: u64,
+    /// New total bridged out
+    pub total_bridged_out: u64,
+    /// Unix timestamp
+    pub timestamp: i64,
+}
+
+/// Emitted by x0-wrapper when bridge_burn is called
+#[event]
+pub struct WrapperBridgeBurn {
+    /// The bridge program that invoked bridge_burn
+    pub bridge_program: Pubkey,
+    /// User whose x0-USD was burned
+    pub user: Pubkey,
+    /// Amount of x0-USD burned
+    pub amount: u64,
+    /// USDC transferred to bridge reserve
+    pub usdc_transferred: u64,
+    /// New reserve USDC balance
+    pub reserve_balance: u64,
+    /// New outstanding wrapper supply
+    pub outstanding_supply: u64,
+    /// Unix timestamp
+    pub timestamp: i64,
+}
+
+/// Emitted when outbound circuit breaker is triggered
+#[event]
+pub struct BridgeOutCircuitBreakerTriggered {
+    /// Bridge config PDA
+    pub config: Pubkey,
+    /// Total bridged out at time of trigger
+    pub total_bridged_out: u64,
+    /// Circuit breaker threshold
+    pub threshold: u64,
+    /// Unix timestamp
+    pub timestamp: i64,
+}
+
+/// Emitted when daily outflow counter is reset
+#[event]
+pub struct BridgeOutDailyReset {
+    /// Bridge config PDA
+    pub config: Pubkey,
+    /// Previous day's total outflow volume
+    pub previous_volume: u64,
+    /// Unix timestamp
+    pub timestamp: i64,
+}

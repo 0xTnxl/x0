@@ -1,7 +1,11 @@
-//! x0-bridge: Cross-chain bridge receiver for Base → Solana
+//! x0-bridge: Cross-chain bridge for Base ↔ Solana
 //!
-//! Receives USDC lock proofs from Base via Hyperlane and mints x0-USD
-//! on Solana via CPI to x0-wrapper, maintaining the reserve invariant.
+//! Bidirectional bridge supporting:
+//! - **Inbound (Base → Solana)**: USDC lock proofs from Base via Hyperlane,
+//!   verified by SP1 STARK proofs, mint x0-USD via CPI to x0-wrapper.
+//! - **Outbound (Solana → Base)**: User burns x0-USD, creates BridgeOutMessage PDA,
+//!   SP1 Solana prover proves PDA existence, X0UnlockContract on Base verifies
+//!   and releases USDC.
 //!
 //! # Architecture
 //!
@@ -19,16 +23,22 @@
 //!                                   │ 3. execute_mint()         │
 //!                                   │    → CPI x0-wrapper       │
 //!                                   │    → x0-USD to recipient  │
-//!                                   └───────────────────────────┘
+//!                                   │                           │
+//! ┌──────────────────┐              │ 4. initiate_bridge_out()  │
+//! │ X0UnlockContract │  SP1 Proof   │    → CPI x0-wrapper burn  │
+//! │                  │ ◄─────────  │    → BridgeOutMessage PDA │
+//! │ unlock(proof)    │  Prover     │                           │
+//! │ → release USDC   │              │                           │
+//! └──────────────────┘              └───────────────────────────┘
 //! ```
 //!
 //! # Security
 //!
-//! - Hyperlane ISM validates message delivery (signatures, replay protection)
-//! - SP1 STARK proofs cryptographically verify EVM state (block, tx, receipt)
-//! - Two-step verification prevents compute budget exhaustion
-//! - Rate limiting prevents bridge flooding
-//! - Whitelisted EVM contracts prevent unauthorized lock sources
+//! Both directions use SP1 STARK proofs for trustless verification:
+//! - Inbound: SP1 EVM prover proves Base transaction (block header + receipt)
+//! - Outbound: SP1 Solana prover proves Solana account state (validator sigs + Merkle)
+//! - Rate limiting and circuit breakers in both directions
+//! - Whitelisted EVM contracts prevent unauthorized sources
 //! - CPI to x0-wrapper maintains 1:1 USDC reserve invariant
 
 #![allow(unexpected_cfgs)]
@@ -268,5 +278,29 @@ pub mod x0_bridge {
         amount: u64,
     ) -> Result<()> {
         instructions::replenish_reserve::handler(ctx, amount)
+    }
+
+    // ========================================================================
+    // Outbound Bridge (Solana → Base)
+    // ========================================================================
+
+    /// Initiate a bridge out: burn x0-USD on Solana for USDC unlock on Base
+    ///
+    /// Burns x0-USD from the user via CPI to x0-wrapper::bridge_burn,
+    /// creates a BridgeOutMessage PDA, and emits a BridgeOutInitiated event.
+    ///
+    /// The off-chain SP1 Solana prover reads this PDA to generate a STARK
+    /// proof of its existence. The X0UnlockContract on Base verifies the
+    /// proof and releases USDC to the specified EVM recipient.
+    ///
+    /// # Arguments
+    /// * `evm_recipient` - 20-byte EVM address to receive USDC on Base
+    /// * `amount` - Amount of x0-USD to burn (USDC micro-units, 6 decimals)
+    pub fn initiate_bridge_out(
+        ctx: Context<InitiateBridgeOut>,
+        evm_recipient: [u8; 20],
+        amount: u64,
+    ) -> Result<()> {
+        instructions::bridge_out::handler(ctx, evm_recipient, amount)
     }
 }

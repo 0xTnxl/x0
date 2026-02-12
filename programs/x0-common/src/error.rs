@@ -630,6 +630,14 @@ pub enum X0WrapperError {
     /// Bridge minting is disabled (bridge_program == Pubkey::default)
     #[msg("Bridge minting is disabled")]
     BridgeMintDisabled, // 0x1651
+
+    /// Bridge burning is disabled (bridge_program == Pubkey::default)
+    #[msg("Bridge burning is disabled")]
+    BridgeBurnDisabled, // 0x1652
+
+    /// Insufficient wrapper supply for bridge burn
+    #[msg("Insufficient wrapper supply for bridge burn")]
+    InsufficientWrapperSupply, // 0x1653
 }
 
 /// Error codes for x0_zk_verifier program
@@ -898,7 +906,43 @@ pub enum X0BridgeError {
     /// Invalid action nonce
     #[msg("Invalid action nonce")]
     InvalidActionNonce, // 0x1865
+
+    // ========================================================================
+    // Outbound Bridge Errors (0x1870-0x187F) — Solana → Base
+    // ========================================================================
+
+    /// Bridge outbound operations are paused
+    #[msg("Bridge outbound operations are paused")]
+    BridgeOutPaused, // 0x1870
+
+    /// Outbound amount exceeds per-transaction maximum
+    #[msg("Outbound bridge amount exceeds per-transaction maximum")]
+    OutboundAmountTooLarge, // 0x1871
+
+    /// Outbound amount below minimum
+    #[msg("Outbound bridge amount below minimum")]
+    OutboundAmountTooSmall, // 0x1872
+
+    /// Daily outflow rate limit exceeded
+    #[msg("Daily bridge outflow limit exceeded")]
+    DailyOutflowLimitExceeded, // 0x1873
+
+    /// Outbound circuit breaker triggered
+    #[msg("Outbound circuit breaker triggered: total outflow exceeds safety threshold")]
+    OutboundCircuitBreakerTriggered, // 0x1874
+
+    /// Invalid EVM recipient address (zero address or all-0xFF check)
+    #[msg("Invalid EVM recipient address")]
+    InvalidEvmRecipient, // 0x1875
+
+    /// Bridge out message already exists (replay prevention)
+    #[msg("Bridge out message already exists")]
+    BridgeOutMessageExists, // 0x1876
 }
+
+/// Error codes for x0-wrapper bridge_burn operation
+/// These are in the X0WrapperError enum but documented here for clarity.
+/// Bridge burn errors use 0x1660-0x166F range.
 
 /// Unified error type for cross-program invocations
 #[derive(Clone, Debug)]
