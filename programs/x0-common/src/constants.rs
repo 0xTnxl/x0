@@ -536,8 +536,10 @@ pub const BRIDGE_CONFIG_SIZE: usize = 8 + // discriminator
     8 +  // nonce
     8 +  // daily_inflow_volume
     8 +  // daily_inflow_reset_timestamp
-    4 + (MAX_ALLOWED_EVM_CONTRACTS * EVM_ADDRESS_SIZE) + // allowed_evm_contracts
-    4 + (MAX_SUPPORTED_DOMAINS * 4) + // supported_domains
+    1 + // allowed_evm_contracts_count
+    (MAX_ALLOWED_EVM_CONTRACTS * EVM_ADDRESS_SIZE) + // allowed_evm_contracts (fixed array)
+    1 + // supported_domains_count
+    (MAX_SUPPORTED_DOMAINS * 4) + // supported_domains (fixed array)
     8 +  // admin_action_nonce
     1 +  // bump
     56;  // reserved

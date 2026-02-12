@@ -50,7 +50,14 @@ deploy = "anchor deploy"
 
 [workspace]
 members = [
-    "programs/*"
+    "programs/x0-bridge",
+    "programs/x0-escrow",
+    "programs/x0-guard",
+    "programs/x0-registry",
+    "programs/x0-reputation",
+    "programs/x0-token",
+    "programs/x0-wrapper",
+    "programs/x0-zk-verifier"
 ]
 
 [test]

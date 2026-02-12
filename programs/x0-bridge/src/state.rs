@@ -77,12 +77,19 @@ pub struct BridgeConfig {
     /// Timestamp when daily counter was last reset
     pub daily_inflow_reset_timestamp: i64,
 
+    /// Number of active entries in allowed_evm_contracts
+    pub allowed_evm_contracts_count: u8,
+
     /// Whitelisted EVM lock contract addresses (20 bytes each)
-    /// Only messages from these contracts are accepted
-    pub allowed_evm_contracts: Vec<[u8; EVM_ADDRESS_SIZE]>,
+    /// Only the first `allowed_evm_contracts_count` entries are active
+    pub allowed_evm_contracts: [[u8; EVM_ADDRESS_SIZE]; MAX_ALLOWED_EVM_CONTRACTS],
+
+    /// Number of active entries in supported_domains
+    pub supported_domains_count: u8,
 
     /// Supported Hyperlane origin domain IDs
-    pub supported_domains: Vec<u32>,
+    /// Only the first `supported_domains_count` entries are active
+    pub supported_domains: [u32; MAX_SUPPORTED_DOMAINS],
 
     /// Monotonic nonce for timelocked admin actions
     pub admin_action_nonce: u64,
@@ -101,12 +108,62 @@ impl BridgeConfig {
 
     /// Check if a Hyperlane domain is supported
     pub fn is_domain_supported(&self, domain: u32) -> bool {
-        self.supported_domains.contains(&domain)
+        let count = self.supported_domains_count as usize;
+        self.supported_domains[..count].contains(&domain)
     }
 
     /// Check if an EVM contract address is whitelisted
     pub fn is_contract_allowed(&self, address: &[u8; EVM_ADDRESS_SIZE]) -> bool {
-        self.allowed_evm_contracts.contains(address)
+        let count = self.allowed_evm_contracts_count as usize;
+        self.allowed_evm_contracts[..count].contains(address)
+    }
+
+    /// Add an EVM contract to the allowed list. Returns error if full or duplicate.
+    pub fn add_contract(&mut self, contract: [u8; EVM_ADDRESS_SIZE]) -> Result<()> {
+        let count = self.allowed_evm_contracts_count as usize;
+        require!(count < MAX_ALLOWED_EVM_CONTRACTS, x0_common::error::X0BridgeError::TooManyEVMContracts);
+        require!(!self.is_contract_allowed(&contract), x0_common::error::X0BridgeError::BridgeAlreadyInitialized);
+        self.allowed_evm_contracts[count] = contract;
+        self.allowed_evm_contracts_count += 1;
+        Ok(())
+    }
+
+    /// Remove an EVM contract from the allowed list. Returns error if not found.
+    pub fn remove_contract(&mut self, contract: &[u8; EVM_ADDRESS_SIZE]) -> Result<()> {
+        let count = self.allowed_evm_contracts_count as usize;
+        let pos = self.allowed_evm_contracts[..count]
+            .iter()
+            .position(|c| c == contract)
+            .ok_or(x0_common::error::X0BridgeError::MessageNotFound)?;
+        // Swap-remove: move last element into the gap
+        self.allowed_evm_contracts[pos] = self.allowed_evm_contracts[count - 1];
+        self.allowed_evm_contracts[count - 1] = [0u8; EVM_ADDRESS_SIZE];
+        self.allowed_evm_contracts_count -= 1;
+        Ok(())
+    }
+
+    /// Add a supported domain. Returns error if full or duplicate.
+    pub fn add_domain(&mut self, domain: u32) -> Result<()> {
+        let count = self.supported_domains_count as usize;
+        require!(count < MAX_SUPPORTED_DOMAINS, x0_common::error::X0BridgeError::TooManySupportedDomains);
+        require!(!self.is_domain_supported(domain), x0_common::error::X0BridgeError::TooManySupportedDomains);
+        self.supported_domains[count] = domain;
+        self.supported_domains_count += 1;
+        Ok(())
+    }
+
+    /// Remove a supported domain. Returns error if not found.
+    pub fn remove_domain(&mut self, domain: u32) -> Result<()> {
+        let count = self.supported_domains_count as usize;
+        let pos = self.supported_domains[..count]
+            .iter()
+            .position(|d| *d == domain)
+            .ok_or(x0_common::error::X0BridgeError::UnsupportedDomain)?;
+        // Swap-remove
+        self.supported_domains[pos] = self.supported_domains[count - 1];
+        self.supported_domains[count - 1] = 0;
+        self.supported_domains_count -= 1;
+        Ok(())
     }
 
     /// Reset daily counter if 24 hours have passed

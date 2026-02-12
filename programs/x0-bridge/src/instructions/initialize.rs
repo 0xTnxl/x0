@@ -1,10 +1,12 @@
 //! Initialize the x0-bridge configuration
 //!
-//! Creates:
-//! 1. BridgeConfig PDA - global bridge settings
-//! 2. Bridge USDC reserve token account
+//! Uses a three-step pattern to avoid SBF stack overflow:
 //!
-//! Must be called once by the initial admin before the bridge is operational.
+//! 1. `create_config`  — allocates the BridgeConfig PDA (lightweight)
+//! 2. `create_reserve` — creates the USDC reserve token account (lightweight)
+//! 3. `initialize`     — populates the config via `#[account(zero)]`
+//!
+//! All three can be packed into a single transaction.
 
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
@@ -16,26 +18,47 @@ use x0_common::{
     events::BridgeInitialized,
 };
 
+// ============================================================================
+// Step 1: Allocate config PDA only
+// ============================================================================
+
+/// Allocate the BridgeConfig PDA. Minimal struct — avoids BridgeConfig
+/// deserialization entirely, keeping the stack frame small.
 #[derive(Accounts)]
-pub struct Initialize<'info> {
-    /// The admin who will control the bridge (should be multisig)
+pub struct CreateConfig<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
 
-    /// The bridge configuration PDA
+    /// CHECK: We only allocate space here; `initialize` populates via `zero`.
     #[account(
         init,
         payer = admin,
         space = BridgeConfig::space(),
         seeds = [BRIDGE_CONFIG_SEED],
         bump,
+        owner = crate::ID,
     )]
-    pub config: Box<Account<'info, BridgeConfig>>,
+    pub config: UncheckedAccount<'info>,
 
-    /// The USDC mint on Solana
-    #[account(
-        constraint = usdc_mint.decimals == WRAPPER_DECIMALS @ X0BridgeError::InvalidWrapperProgram,
-    )]
+    pub system_program: Program<'info, System>,
+}
+
+pub fn create_config_handler(ctx: Context<CreateConfig>) -> Result<()> {
+    msg!("Bridge config PDA created: {}", ctx.accounts.config.key());
+    Ok(())
+}
+
+// ============================================================================
+// Step 2: Create the USDC reserve token account
+// ============================================================================
+
+/// Create the bridge USDC reserve token account (PDA-owned).
+/// Separate from create_config to stay under the 4096-byte stack limit.
+#[derive(Accounts)]
+pub struct CreateReserve<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
     pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
 
     /// Bridge USDC reserve token account (PDA-owned)
@@ -58,11 +81,50 @@ pub struct Initialize<'info> {
     )]
     pub reserve_authority: UncheckedAccount<'info>,
 
-    /// Token program for USDC
     pub usdc_token_program: Interface<'info, TokenInterface>,
-
-    /// System program
     pub system_program: Program<'info, System>,
+}
+
+pub fn create_reserve_handler(ctx: Context<CreateReserve>) -> Result<()> {
+    // Validate USDC decimals
+    require!(
+        ctx.accounts.usdc_mint.decimals == WRAPPER_DECIMALS,
+        X0BridgeError::InvalidWrapperProgram
+    );
+    msg!(
+        "Bridge USDC reserve created: {}",
+        ctx.accounts.bridge_usdc_reserve.key()
+    );
+    Ok(())
+}
+
+// ============================================================================
+// Step 3: Populate the config (uses `zero` — no init stack pressure)
+// ============================================================================
+
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    /// Config PDA (already allocated by create_config).
+    /// `zero` checks discriminator is all-zero and writes it, but
+    /// skips the heavy `init` codegen.
+    #[account(
+        zero,
+        seeds = [BRIDGE_CONFIG_SEED],
+        bump,
+    )]
+    pub config: Box<Account<'info, BridgeConfig>>,
+
+    pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    /// Bridge USDC reserve (already created by create_reserve)
+    #[account(
+        seeds = [BRIDGE_RESERVE_SEED, usdc_mint.key().as_ref()],
+        bump,
+    )]
+    pub bridge_usdc_reserve: Box<InterfaceAccount<'info, TokenAccount>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -90,6 +152,17 @@ pub fn handler(
         X0BridgeError::TooManySupportedDomains
     );
 
+    // Build fixed-size arrays from input Vecs
+    let mut evm_contracts_arr = [[0u8; EVM_ADDRESS_SIZE]; MAX_ALLOWED_EVM_CONTRACTS];
+    for (i, contract) in allowed_evm_contracts.iter().enumerate() {
+        evm_contracts_arr[i] = *contract;
+    }
+
+    let mut domains_arr = [0u32; MAX_SUPPORTED_DOMAINS];
+    for (i, domain) in supported_domains.iter().enumerate() {
+        domains_arr[i] = *domain;
+    }
+
     // Initialize config
     let config = &mut ctx.accounts.config;
     config.version = 1;
@@ -107,8 +180,10 @@ pub fn handler(
     config.nonce = 0;
     config.daily_inflow_volume = 0;
     config.daily_inflow_reset_timestamp = clock.unix_timestamp;
-    config.allowed_evm_contracts = allowed_evm_contracts;
-    config.supported_domains = supported_domains;
+    config.allowed_evm_contracts_count = allowed_evm_contracts.len() as u8;
+    config.allowed_evm_contracts = evm_contracts_arr;
+    config.supported_domains_count = supported_domains.len() as u8;
+    config.supported_domains = domains_arr;
     config.admin_action_nonce = 0;
     config.bump = ctx.bumps.config;
     config._reserved = [0u8; 56];
@@ -126,7 +201,7 @@ pub fn handler(
         "Bridge initialized: admin={}, mailbox={}, domains={:?}",
         config.admin,
         config.hyperlane_mailbox,
-        config.supported_domains,
+        &config.supported_domains[..config.supported_domains_count as usize],
     );
 
     Ok(())

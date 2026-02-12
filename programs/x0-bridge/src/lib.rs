@@ -49,10 +49,23 @@ pub mod x0_bridge {
     use super::*;
 
     // ========================================================================
-    // Initialization
+    // Initialization (three-step: create_config + create_reserve + initialize)
     // ========================================================================
 
-    /// Initialize the bridge configuration
+    /// Step 1: Allocate the BridgeConfig PDA.
+    ///
+    /// Split from `initialize` to avoid SBF's 4096-byte stack limit.
+    /// All three steps can be packed into a single transaction.
+    pub fn create_config(ctx: Context<CreateConfig>) -> Result<()> {
+        instructions::initialize::create_config_handler(ctx)
+    }
+
+    /// Step 2: Create the bridge USDC reserve token account.
+    pub fn create_reserve(ctx: Context<CreateReserve>) -> Result<()> {
+        instructions::initialize::create_reserve_handler(ctx)
+    }
+
+    /// Step 3: Populate the bridge configuration.
     ///
     /// Sets up the bridge with:
     /// - Hyperlane mailbox address
@@ -61,6 +74,7 @@ pub mod x0_bridge {
     /// - Initial whitelisted EVM contracts and supported domains
     ///
     /// Must be called by the initial admin (should be multisig).
+    /// Requires `create_config` to have run first.
     pub fn initialize(
         ctx: Context<Initialize>,
         hyperlane_mailbox: Pubkey,

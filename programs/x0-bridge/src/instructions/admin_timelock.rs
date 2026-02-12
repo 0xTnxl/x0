@@ -354,18 +354,7 @@ pub fn execute_admin_action(
     // Execute action based on type
     let action_type_byte: u8 = match action.action_type {
         BridgeAdminActionType::AddEvmContract => {
-            // Re-validate capacity (may have changed since scheduling)
-            require!(
-                config.allowed_evm_contracts.len() < MAX_ALLOWED_EVM_CONTRACTS,
-                X0BridgeError::TooManyEVMContracts
-            );
-            // Re-validate not already added
-            require!(
-                !config.is_contract_allowed(&action.evm_contract),
-                X0BridgeError::TooManyEVMContracts
-            );
-            
-            config.allowed_evm_contracts.push(action.evm_contract);
+            config.add_contract(action.evm_contract)?;
             
             emit!(BridgeContractUpdated {
                 config: config.key(),
@@ -379,13 +368,7 @@ pub fn execute_admin_action(
             0
         }
         BridgeAdminActionType::RemoveEvmContract => {
-            let initial_len = config.allowed_evm_contracts.len();
-            config.allowed_evm_contracts.retain(|c| c != &action.evm_contract);
-            
-            require!(
-                config.allowed_evm_contracts.len() < initial_len,
-                X0BridgeError::MessageNotFound
-            );
+            config.remove_contract(&action.evm_contract)?;
             
             emit!(BridgeContractUpdated {
                 config: config.key(),
@@ -399,28 +382,12 @@ pub fn execute_admin_action(
             1
         }
         BridgeAdminActionType::AddDomain => {
-            require!(
-                config.supported_domains.len() < MAX_SUPPORTED_DOMAINS,
-                X0BridgeError::TooManySupportedDomains
-            );
-            require!(
-                !config.is_domain_supported(action.domain),
-                X0BridgeError::TooManySupportedDomains
-            );
-            
-            config.supported_domains.push(action.domain);
+            config.add_domain(action.domain)?;
             msg!("Executed: Added domain {}", action.domain);
             2
         }
         BridgeAdminActionType::RemoveDomain => {
-            let initial_len = config.supported_domains.len();
-            config.supported_domains.retain(|d| *d != action.domain);
-            
-            require!(
-                config.supported_domains.len() < initial_len,
-                X0BridgeError::UnsupportedDomain
-            );
-            
+            config.remove_domain(action.domain)?;
             msg!("Executed: Removed domain {}", action.domain);
             3
         }

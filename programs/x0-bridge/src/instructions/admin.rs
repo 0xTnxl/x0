@@ -35,19 +35,7 @@ pub fn add_allowed_contract(
     let clock = Clock::get()?;
     let config = &mut ctx.accounts.config;
 
-    // Check capacity
-    require!(
-        config.allowed_evm_contracts.len() < MAX_ALLOWED_EVM_CONTRACTS,
-        X0BridgeError::TooManyEVMContracts
-    );
-
-    // Check not already present
-    require!(
-        !config.is_contract_allowed(&evm_contract),
-        X0BridgeError::BridgeAlreadyInitialized // Reuse: contract already exists
-    );
-
-    config.allowed_evm_contracts.push(evm_contract);
+    config.add_contract(evm_contract)?;
 
     emit!(BridgeContractUpdated {
         config: config.key(),
@@ -73,13 +61,7 @@ pub fn remove_allowed_contract(
     let clock = Clock::get()?;
     let config = &mut ctx.accounts.config;
 
-    let initial_len = config.allowed_evm_contracts.len();
-    config.allowed_evm_contracts.retain(|c| c != &evm_contract);
-
-    require!(
-        config.allowed_evm_contracts.len() < initial_len,
-        X0BridgeError::MessageNotFound // Reuse: contract not found
-    );
+    config.remove_contract(&evm_contract)?;
 
     emit!(BridgeContractUpdated {
         config: config.key(),
@@ -104,17 +86,7 @@ pub fn add_supported_domain(
 ) -> Result<()> {
     let config = &mut ctx.accounts.config;
 
-    require!(
-        config.supported_domains.len() < MAX_SUPPORTED_DOMAINS,
-        X0BridgeError::TooManySupportedDomains
-    );
-
-    require!(
-        !config.is_domain_supported(domain),
-        X0BridgeError::BridgeAlreadyInitialized // Reuse: domain already exists
-    );
-
-    config.supported_domains.push(domain);
+    config.add_domain(domain)?;
 
     msg!("Added supported domain: {}", domain);
 

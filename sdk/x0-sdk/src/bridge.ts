@@ -8,6 +8,7 @@
  *   - EVM proof submission
  *   - Mint execution
  *   - Admin operations (pause, domain management, etc.)
+ *   - Timelocked admin operations (schedule, execute, cancel)
  *
  * @example
  * ```ts
@@ -23,7 +24,7 @@
  *
  * // Build verify + mint instructions
  * const verifyIx = bridge.buildVerifyEvmProofInstruction({
- *   messageId, proofData, publicValues, operator
+ *   messageId, proofData, publicValues, payer, sp1Verifier
  * });
  * ```
  *
@@ -35,28 +36,26 @@ import {
   PublicKey,
   TransactionInstruction,
   SystemProgram,
-  SYSVAR_CLOCK_PUBKEY,
-  SYSVAR_RENT_PUBKEY,
 } from "@solana/web3.js";
 import {
   TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
-  ASSOCIATED_TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import BN from "bn.js";
 import { getInstructionDiscriminator } from "./utils";
 import { X0_BRIDGE_PROGRAM_ID, X0_WRAPPER_PROGRAM_ID } from "./constants";
 
 // ============================================================================
-// PDA Seeds (matching on-chain constants)
+// PDA Seeds (matching on-chain x0_common::constants)
 // ============================================================================
 
 const BRIDGE_CONFIG_SEED = Buffer.from("bridge_config");
 const BRIDGE_MESSAGE_SEED = Buffer.from("bridge_message");
-const EVM_PROOF_CONTEXT_SEED = Buffer.from("evm_proof_context");
+const EVM_PROOF_CONTEXT_SEED = Buffer.from("evm_proof");
 const BRIDGE_RESERVE_SEED = Buffer.from("bridge_reserve");
 const BRIDGE_RESERVE_AUTHORITY_SEED = Buffer.from("bridge_reserve_authority");
+const BRIDGE_ADMIN_ACTION_SEED = Buffer.from("bridge_admin_action");
 
 // ============================================================================
 // Types
@@ -85,19 +84,26 @@ export interface BridgeConfig {
   bump: number;
 }
 
-/** On-chain BridgeMessage account data */
+/**
+ * On-chain BridgeMessage account data
+ *
+ * Field order matches Rust struct:
+ *   version, message_id, origin_domain, sender([u8;32]),
+ *   recipient, amount, received_at, status, evm_tx_hash,
+ *   nonce, bump, _reserved
+ */
 export interface BridgeMessage {
+  version: number;
+  messageId: Uint8Array; // 32 bytes
   originDomain: number;
-  sender: Uint8Array; // 20 bytes EVM address
+  sender: Uint8Array; // 32 bytes (EVM address left-padded to 32)
   recipient: PublicKey;
   amount: BN;
-  nonce: BN;
-  messageId: Uint8Array; // 32 bytes
-  hyperlaneMessageId: Uint8Array; // 32 bytes
   receivedAt: BN;
   status: BridgeMessageStatus;
+  evmTxHash: Uint8Array; // 32 bytes
+  nonce: BN;
   bump: number;
-  version: number;
 }
 
 export enum BridgeMessageStatus {
@@ -107,40 +113,63 @@ export enum BridgeMessageStatus {
   Failed = 3,
 }
 
-/** On-chain EVMProofContext account data */
+/**
+ * On-chain EVMProofContext account data
+ *
+ * Field order matches Rust struct:
+ *   version, proof_type, verified, verified_at, block_hash,
+ *   block_number, tx_hash, from([u8;20]), to([u8;20]), value,
+ *   event_logs, message_id, bump, _reserved
+ */
 export interface EVMProofContext {
   version: number;
   proofType: EVMProofType;
   verified: boolean;
   verifiedAt: BN;
-  blockHash: Uint8Array;
+  blockHash: Uint8Array; // 32 bytes
   blockNumber: BN;
-  txHash: Uint8Array;
-  evmSender: Uint8Array;
-  evmContract: Uint8Array;
-  amount: BN;
-  solanaRecipient: PublicKey;
-  nonce: BN;
-  eventSignature: Uint8Array;
-  isConsumed: boolean;
+  txHash: Uint8Array; // 32 bytes
+  from: Uint8Array; // 20 bytes EVM address
+  to: Uint8Array; // 20 bytes EVM address
+  value: BN;
+  eventLogs: EVMEventLog[];
+  messageId: Uint8Array; // 32 bytes
   bump: number;
 }
 
-export enum EVMProofType {
-  LockDeposit = 0,
-  BatchDeposit = 1,
+/** Matches on-chain EVMEventLog struct */
+export interface EVMEventLog {
+  contractAddress: Uint8Array; // 20 bytes
+  topics: Uint8Array[]; // each 32 bytes
+  data: Uint8Array;
 }
 
-/** Parameters for initializing the bridge */
+export enum EVMProofType {
+  Transaction = 0,
+  Batch = 1,
+}
+
+/**
+ * Parameters for initializing the bridge.
+ *
+ * On-chain accounts: admin, config, usdc_mint, bridge_usdc_reserve,
+ *   reserve_authority, usdc_token_program, system_program
+ * On-chain args:     hyperlane_mailbox, sp1_verifier, wrapper_program,
+ *   wrapper_config, wrapper_mint, allowed_evm_contracts, supported_domains
+ */
 export interface InitializeBridgeParams {
   admin: PublicKey;
-  operator: PublicKey;
-  wrapperProgram: PublicKey;
-  sp1VerifierProgram: PublicKey;
-  hyperlaneMailbox: PublicKey;
   usdcMint: PublicKey;
+  /** Token program for USDC (TOKEN_PROGRAM_ID or TOKEN_2022_PROGRAM_ID) */
+  usdcTokenProgram?: PublicKey;
+  // --- Instruction args (serialized in data, not passed as accounts) ---
+  hyperlaneMailbox: PublicKey;
+  sp1Verifier: PublicKey;
+  wrapperProgram: PublicKey;
+  wrapperConfig: PublicKey;
   wrapperMint: PublicKey;
-  initialDomains: number[];
+  allowedEvmContracts: Uint8Array[]; // each 20 bytes
+  supportedDomains: number[];
 }
 
 /** Parameters for verifying an EVM proof */
@@ -148,17 +177,18 @@ export interface VerifyEvmProofParams {
   messageId: Uint8Array; // 32 bytes
   proofData: Buffer;
   publicValues: Buffer;
-  operator: PublicKey;
+  payer: PublicKey;
+  sp1Verifier: PublicKey;
 }
 
 /** Parameters for executing a mint after proof verification */
 export interface ExecuteMintParams {
   messageId: Uint8Array; // 32 bytes
+  payer: PublicKey;
   recipient: PublicKey;
-  operator: PublicKey;
   wrapperConfig: PublicKey;
-  wrapperMintAuthority: PublicKey;
   wrapperStats: PublicKey;
+  wrapperMintAuthority: PublicKey;
   wrapperReserveAccount: PublicKey;
 }
 
@@ -167,6 +197,57 @@ export interface ReplenishReserveParams {
   amount: BN;
   depositor: PublicKey;
   depositorUsdcAccount: PublicKey;
+}
+
+/** Parameters for scheduling a timelocked admin action */
+export interface ScheduleAdminActionParams {
+  admin: PublicKey;
+  nonce: BN;
+}
+
+/** Parameters for executing/cancelling a timelocked admin action */
+export interface AdminActionNonceParams {
+  admin: PublicKey;
+  nonce: BN;
+}
+
+/**
+ * SP1 STARK proof public inputs — the JSON shape output by
+ * `x0-sp1-host prove --public-inputs-output public_inputs.json`.
+ *
+ * Matches `EVMProofPublicInputs` in sp1-prover/common and
+ * `SP1PublicInputs` in programs/x0-bridge/src/state.rs.
+ *
+ * These are the values cryptographically committed inside the STARK
+ * circuit and verified on-chain by the SP1 verifier program.
+ */
+export interface SP1PublicInputs {
+  /** EVM block hash (32 bytes as number array) */
+  block_hash: number[];
+  /** EVM block number */
+  block_number: number;
+  /** EVM transaction hash (32 bytes as number array) */
+  tx_hash: number[];
+  /** Transaction sender — 20-byte EVM address as number array */
+  from: number[];
+  /** Transaction recipient/contract — 20-byte EVM address as number array */
+  to: number[];
+  /** ETH value transferred in wei (0 for ERC-20 locks) */
+  value: number;
+  /** Whether the EVM transaction succeeded (receipt.status == 1) */
+  success: boolean;
+  /** Extracted event logs from the transaction receipt */
+  event_logs: SP1EventLog[];
+}
+
+/** Event log entry in SP1 public inputs JSON (matches sp1-prover EventLog) */
+export interface SP1EventLog {
+  /** Contract that emitted the event (20 bytes as number array) */
+  contract_address: number[];
+  /** Indexed topics — topic[0] = event signature hash (each 32 bytes) */
+  topics: number[][];
+  /** ABI-encoded non-indexed event data (byte array) */
+  data: number[];
 }
 
 // ============================================================================
@@ -223,6 +304,16 @@ export class BridgeClient {
     );
   }
 
+  /** Derive the BridgeAdminAction PDA for a given nonce */
+  deriveAdminActionPda(nonce: BN): [PublicKey, number] {
+    const nonceBuf = Buffer.alloc(8);
+    nonceBuf.writeBigUInt64LE(BigInt(nonce.toString()), 0);
+    return PublicKey.findProgramAddressSync(
+      [BRIDGE_ADMIN_ACTION_SEED, nonceBuf],
+      this.programId
+    );
+  }
+
   // --------------------------------------------------------------------------
   // Account Fetching
   // --------------------------------------------------------------------------
@@ -231,11 +322,7 @@ export class BridgeClient {
   async fetchConfig(): Promise<BridgeConfig | null> {
     const [configPda] = this.deriveConfigPda();
     const accountInfo = await this.connection.getAccountInfo(configPda);
-
-    if (!accountInfo) {
-      return null;
-    }
-
+    if (!accountInfo) return null;
     return this.deserializeBridgeConfig(accountInfo.data);
   }
 
@@ -243,11 +330,7 @@ export class BridgeClient {
   async fetchMessage(messageId: Uint8Array): Promise<BridgeMessage | null> {
     const [messagePda] = this.deriveMessagePda(messageId);
     const accountInfo = await this.connection.getAccountInfo(messagePda);
-
-    if (!accountInfo) {
-      return null;
-    }
-
+    if (!accountInfo) return null;
     return this.deserializeBridgeMessage(accountInfo.data);
   }
 
@@ -257,11 +340,7 @@ export class BridgeClient {
   ): Promise<EVMProofContext | null> {
     const [proofPda] = this.deriveProofContextPda(messageId);
     const accountInfo = await this.connection.getAccountInfo(proofPda);
-
-    if (!accountInfo) {
-      return null;
-    }
-
+    if (!accountInfo) return null;
     return this.deserializeEVMProofContext(accountInfo.data);
   }
 
@@ -274,9 +353,7 @@ export class BridgeClient {
   /** Get remaining daily volume capacity */
   async remainingDailyVolume(): Promise<BN> {
     const config = await this.fetchConfig();
-    if (!config) {
-      return new BN(0);
-    }
+    if (!config) return new BN(0);
 
     const now = Math.floor(Date.now() / 1000);
     const resetAt = config.dailyInflowResetTimestamp.toNumber();
@@ -295,39 +372,38 @@ export class BridgeClient {
   // Instruction Builders
   // --------------------------------------------------------------------------
 
-  /** Build the initialize bridge instruction */
-  buildInitializeInstruction(
+  /**
+   * Build all three initialization instructions as a convenience.
+   *
+   * Returns [createConfig, createReserve, initialize] — add all three
+   * to a single transaction.
+   */
+  buildInitializeInstructions(
     params: InitializeBridgeParams
+  ): TransactionInstruction[] {
+    return [
+      this.buildCreateConfigInstruction(params.admin),
+      this.buildCreateReserveInstruction(params.admin, params.usdcMint, params.usdcTokenProgram),
+      this.buildInitializeInstruction(params),
+    ];
+  }
+
+  /**
+   * Step 1: Allocate the BridgeConfig PDA.
+   *
+   * On-chain accounts: admin(signer,mut), config(init), system_program
+   */
+  buildCreateConfigInstruction(
+    admin: PublicKey
   ): TransactionInstruction {
     const [configPda] = this.deriveConfigPda();
-    const [reserveAuthority] = this.deriveReserveAuthorityPda();
-    const [bridgeReserve] = this.deriveReservePda(params.usdcMint);
-
-    const discriminator = getInstructionDiscriminator("initialize");
-
-    // Serialize args: domains as u32 LE array
-    const domainsBuf = Buffer.alloc(4 + params.initialDomains.length * 4);
-    domainsBuf.writeUInt32LE(params.initialDomains.length, 0);
-    params.initialDomains.forEach((d, i) => {
-      domainsBuf.writeUInt32LE(d, 4 + i * 4);
-    });
-
-    const data = Buffer.concat([discriminator, domainsBuf]);
+    const discriminator = getInstructionDiscriminator("create_config");
+    const data = Buffer.from(discriminator);
 
     const keys = [
-      { pubkey: params.admin, isSigner: true, isWritable: true },
+      { pubkey: admin, isSigner: true, isWritable: true },
       { pubkey: configPda, isSigner: false, isWritable: true },
-      { pubkey: bridgeReserve, isSigner: false, isWritable: true },
-      { pubkey: reserveAuthority, isSigner: false, isWritable: false },
-      { pubkey: params.usdcMint, isSigner: false, isWritable: false },
-      { pubkey: params.wrapperMint, isSigner: false, isWritable: false },
-      { pubkey: params.wrapperProgram, isSigner: false, isWritable: false },
-      { pubkey: params.sp1VerifierProgram, isSigner: false, isWritable: false },
-      { pubkey: params.hyperlaneMailbox, isSigner: false, isWritable: false },
-      { pubkey: params.operator, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
     ];
 
     return new TransactionInstruction({
@@ -337,16 +413,114 @@ export class BridgeClient {
     });
   }
 
-  /** Build the verify_evm_proof instruction */
+  /**
+   * Step 2: Create the bridge USDC reserve token account.
+   *
+   * On-chain accounts: admin(signer,mut), usdc_mint, bridge_usdc_reserve(init),
+   *   reserve_authority, usdc_token_program, system_program
+   */
+  buildCreateReserveInstruction(
+    admin: PublicKey,
+    usdcMint: PublicKey,
+    usdcTokenProgram: PublicKey = TOKEN_PROGRAM_ID
+  ): TransactionInstruction {
+    const [bridgeReserve] = this.deriveReservePda(usdcMint);
+    const [reserveAuthority] = this.deriveReserveAuthorityPda();
+    const discriminator = getInstructionDiscriminator("create_reserve");
+    const data = Buffer.from(discriminator);
+
+    const keys = [
+      { pubkey: admin, isSigner: true, isWritable: true },
+      { pubkey: usdcMint, isSigner: false, isWritable: false },
+      { pubkey: bridgeReserve, isSigner: false, isWritable: true },
+      { pubkey: reserveAuthority, isSigner: false, isWritable: false },
+      { pubkey: usdcTokenProgram, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data,
+    });
+  }
+
+  /**
+   * Step 3: Populate the bridge configuration.
+   *
+   * On-chain accounts: admin(signer,mut), config(zero,mut), usdc_mint,
+   *   bridge_usdc_reserve
+   *
+   * On-chain args: hyperlane_mailbox, sp1_verifier, wrapper_program,
+   *   wrapper_config, wrapper_mint, allowed_evm_contracts, supported_domains
+   */
+  buildInitializeInstruction(
+    params: InitializeBridgeParams
+  ): TransactionInstruction {
+    const [configPda] = this.deriveConfigPda();
+    const [bridgeReserve] = this.deriveReservePda(params.usdcMint);
+
+    const discriminator = getInstructionDiscriminator("initialize");
+
+    // Serialize args
+    const contractsVecLen = Buffer.alloc(4);
+    contractsVecLen.writeUInt32LE(params.allowedEvmContracts.length, 0);
+    const contractsData = Buffer.concat(
+      params.allowedEvmContracts.map((c) => Buffer.from(c))
+    );
+
+    const domainsVecLen = Buffer.alloc(4);
+    domainsVecLen.writeUInt32LE(params.supportedDomains.length, 0);
+    const domainsData = Buffer.alloc(params.supportedDomains.length * 4);
+    params.supportedDomains.forEach((d, i) => {
+      domainsData.writeUInt32LE(d, i * 4);
+    });
+
+    const data = Buffer.concat([
+      discriminator,
+      params.hyperlaneMailbox.toBuffer(),
+      params.sp1Verifier.toBuffer(),
+      params.wrapperProgram.toBuffer(),
+      params.wrapperConfig.toBuffer(),
+      params.wrapperMint.toBuffer(),
+      contractsVecLen,
+      contractsData,
+      domainsVecLen,
+      domainsData,
+    ]);
+
+    // Account order matches Initialize<'info> struct
+    const keys = [
+      { pubkey: params.admin, isSigner: true, isWritable: true },
+      { pubkey: configPda, isSigner: false, isWritable: true },
+      { pubkey: params.usdcMint, isSigner: false, isWritable: false },
+      { pubkey: bridgeReserve, isSigner: false, isWritable: false },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data,
+    });
+  }
+
+  /**
+   * Build the verify_evm_proof instruction.
+   *
+   * On-chain accounts (in order):
+   *   payer(signer,mut), config, bridge_message(mut),
+   *   proof_context(init,mut), sp1_verifier, system_program
+   */
   buildVerifyEvmProofInstruction(
     params: VerifyEvmProofParams
   ): TransactionInstruction {
     const [configPda] = this.deriveConfigPda();
+    const [messagePda] = this.deriveMessagePda(params.messageId);
     const [proofContextPda] = this.deriveProofContextPda(params.messageId);
 
     const discriminator = getInstructionDiscriminator("verify_evm_proof");
 
-    // Serialize: message_id (32) + proof_data (len-prefixed) + public_values (len-prefixed)
+    // Serialize: message_id([u8;32]) + proof(Vec<u8>) + public_values(Vec<u8>)
     const messageIdBuf = Buffer.from(params.messageId);
 
     const proofLenBuf = Buffer.alloc(4);
@@ -364,12 +538,14 @@ export class BridgeClient {
       params.publicValues,
     ]);
 
+    // Account order matches VerifyEVMProof<'info> struct
     const keys = [
-      { pubkey: params.operator, isSigner: true, isWritable: true },
-      { pubkey: configPda, isSigner: false, isWritable: true },
+      { pubkey: params.payer, isSigner: true, isWritable: true },
+      { pubkey: configPda, isSigner: false, isWritable: false },
+      { pubkey: messagePda, isSigner: false, isWritable: true },
       { pubkey: proofContextPda, isSigner: false, isWritable: true },
+      { pubkey: params.sp1Verifier, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      { pubkey: SYSVAR_CLOCK_PUBKEY, isSigner: false, isWritable: false },
     ];
 
     return new TransactionInstruction({
@@ -379,11 +555,23 @@ export class BridgeClient {
     });
   }
 
-  /** Build the execute_mint instruction */
+  /**
+   * Build the execute_mint instruction.
+   *
+   * On-chain accounts (in order):
+   *   payer(signer,mut), config(mut), bridge_message(mut),
+   *   proof_context(read-only), bridge_usdc_reserve(mut),
+   *   bridge_reserve_authority,
+   *   wrapper_config, wrapper_stats(mut), usdc_mint, wrapper_mint(mut),
+   *   wrapper_reserve_account(mut), wrapper_mint_authority,
+   *   recipient_wrapper_account(mut),
+   *   wrapper_program, token_2022_program, usdc_token_program
+   */
   buildExecuteMintInstruction(
     params: ExecuteMintParams,
     usdcMint: PublicKey,
-    wrapperMint: PublicKey
+    wrapperMint: PublicKey,
+    usdcTokenProgram: PublicKey = TOKEN_PROGRAM_ID
   ): TransactionInstruction {
     const [configPda] = this.deriveConfigPda();
     const [messagePda] = this.deriveMessagePda(params.messageId);
@@ -400,39 +588,26 @@ export class BridgeClient {
     );
 
     const discriminator = getInstructionDiscriminator("execute_mint");
-    const data = Buffer.concat([discriminator]);
+    const data = Buffer.from(discriminator);
 
+    // Account order matches ExecuteMint<'info> struct
     const keys = [
-      { pubkey: params.operator, isSigner: true, isWritable: true },
+      { pubkey: params.payer, isSigner: true, isWritable: true },
       { pubkey: configPda, isSigner: false, isWritable: true },
       { pubkey: messagePda, isSigner: false, isWritable: true },
-      { pubkey: proofContextPda, isSigner: false, isWritable: true },
+      { pubkey: proofContextPda, isSigner: false, isWritable: false },
       { pubkey: bridgeReserve, isSigner: false, isWritable: true },
       { pubkey: reserveAuthority, isSigner: false, isWritable: false },
-      { pubkey: recipientWrapperAccount, isSigner: false, isWritable: true },
+      { pubkey: params.wrapperConfig, isSigner: false, isWritable: false },
+      { pubkey: params.wrapperStats, isSigner: false, isWritable: true },
       { pubkey: usdcMint, isSigner: false, isWritable: false },
       { pubkey: wrapperMint, isSigner: false, isWritable: true },
-      {
-        pubkey: params.wrapperConfig,
-        isSigner: false,
-        isWritable: false,
-      },
-      {
-        pubkey: params.wrapperMintAuthority,
-        isSigner: false,
-        isWritable: false,
-      },
-      { pubkey: params.wrapperStats, isSigner: false, isWritable: true },
-      {
-        pubkey: params.wrapperReserveAccount,
-        isSigner: false,
-        isWritable: true,
-      },
+      { pubkey: params.wrapperReserveAccount, isSigner: false, isWritable: true },
+      { pubkey: params.wrapperMintAuthority, isSigner: false, isWritable: false },
+      { pubkey: recipientWrapperAccount, isSigner: false, isWritable: true },
       { pubkey: X0_WRAPPER_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: TOKEN_2022_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: SYSVAR_CLOCK_PUBKEY, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: usdcTokenProgram, isSigner: false, isWritable: false },
     ];
 
     return new TransactionInstruction({
@@ -442,10 +617,18 @@ export class BridgeClient {
     });
   }
 
-  /** Build the replenish_reserve instruction */
+  /**
+   * Build the replenish_reserve instruction.
+   *
+   * On-chain accounts (in order):
+   *   depositor(signer,mut), config, usdc_mint,
+   *   depositor_usdc_account(mut), bridge_usdc_reserve(mut),
+   *   usdc_token_program
+   */
   buildReplenishReserveInstruction(
     params: ReplenishReserveParams,
-    usdcMint: PublicKey
+    usdcMint: PublicKey,
+    usdcTokenProgram: PublicKey = TOKEN_PROGRAM_ID
   ): TransactionInstruction {
     const [configPda] = this.deriveConfigPda();
     const [bridgeReserve] = this.deriveReservePda(usdcMint);
@@ -455,13 +638,14 @@ export class BridgeClient {
     amountBuf.writeBigUInt64LE(BigInt(params.amount.toString()), 0);
     const data = Buffer.concat([discriminator, amountBuf]);
 
+    // Account order matches ReplenishReserve<'info> struct
     const keys = [
       { pubkey: params.depositor, isSigner: true, isWritable: true },
-      { pubkey: configPda, isSigner: false, isWritable: true },
+      { pubkey: configPda, isSigner: false, isWritable: false },
+      { pubkey: usdcMint, isSigner: false, isWritable: false },
       { pubkey: params.depositorUsdcAccount, isSigner: false, isWritable: true },
       { pubkey: bridgeReserve, isSigner: false, isWritable: true },
-      { pubkey: usdcMint, isSigner: false, isWritable: false },
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: usdcTokenProgram, isSigner: false, isWritable: false },
     ];
 
     return new TransactionInstruction({
@@ -471,13 +655,22 @@ export class BridgeClient {
     });
   }
 
-  /** Build the pause_bridge instruction */
-  buildPauseBridgeInstruction(
+  // --------------------------------------------------------------------------
+  // Admin Instruction Builders (immediate — no timelock)
+  // --------------------------------------------------------------------------
+
+  /**
+   * Build the set_paused instruction (pause or unpause the bridge).
+   *
+   * On-chain accounts: admin(signer), config(mut)
+   * On-chain name:     set_paused
+   */
+  buildSetPausedInstruction(
     admin: PublicKey,
     paused: boolean
   ): TransactionInstruction {
     const [configPda] = this.deriveConfigPda();
-    const discriminator = getInstructionDiscriminator("pause_bridge");
+    const discriminator = getInstructionDiscriminator("set_paused");
     const pausedBuf = Buffer.from([paused ? 1 : 0]);
     const data = Buffer.concat([discriminator, pausedBuf]);
 
@@ -493,59 +686,17 @@ export class BridgeClient {
     });
   }
 
-  /** Build the add_allowed_domain instruction */
-  buildAddDomainInstruction(
-    admin: PublicKey,
-    domain: number
-  ): TransactionInstruction {
-    const [configPda] = this.deriveConfigPda();
-    const discriminator = getInstructionDiscriminator("add_allowed_domain");
-    const domainBuf = Buffer.alloc(4);
-    domainBuf.writeUInt32LE(domain, 0);
-    const data = Buffer.concat([discriminator, domainBuf]);
-
-    const keys = [
-      { pubkey: admin, isSigner: true, isWritable: false },
-      { pubkey: configPda, isSigner: false, isWritable: true },
-    ];
-
-    return new TransactionInstruction({
-      programId: this.programId,
-      keys,
-      data,
-    });
-  }
-
-  /** Build the remove_allowed_domain instruction */
-  buildRemoveDomainInstruction(
-    admin: PublicKey,
-    domain: number
-  ): TransactionInstruction {
-    const [configPda] = this.deriveConfigPda();
-    const discriminator = getInstructionDiscriminator("remove_allowed_domain");
-    const domainBuf = Buffer.alloc(4);
-    domainBuf.writeUInt32LE(domain, 0);
-    const data = Buffer.concat([discriminator, domainBuf]);
-
-    const keys = [
-      { pubkey: admin, isSigner: true, isWritable: false },
-      { pubkey: configPda, isSigner: false, isWritable: true },
-    ];
-
-    return new TransactionInstruction({
-      programId: this.programId,
-      keys,
-      data,
-    });
-  }
-
-  /** Build the add_evm_contract instruction */
-  buildAddEvmContractInstruction(
+  /**
+   * Build the add_allowed_contract instruction.
+   *
+   * On-chain accounts: admin(signer), config(mut)
+   */
+  buildAddAllowedContractInstruction(
     admin: PublicKey,
     evmContract: Uint8Array // 20 bytes
   ): TransactionInstruction {
     const [configPda] = this.deriveConfigPda();
-    const discriminator = getInstructionDiscriminator("add_evm_contract");
+    const discriminator = getInstructionDiscriminator("add_allowed_contract");
     const data = Buffer.concat([discriminator, Buffer.from(evmContract)]);
 
     const keys = [
@@ -560,17 +711,45 @@ export class BridgeClient {
     });
   }
 
-  /** Build the update_operator instruction */
-  buildUpdateOperatorInstruction(
+  /**
+   * Build the remove_allowed_contract instruction.
+   *
+   * On-chain accounts: admin(signer), config(mut)
+   */
+  buildRemoveAllowedContractInstruction(
     admin: PublicKey,
-    newOperator: PublicKey
+    evmContract: Uint8Array // 20 bytes
   ): TransactionInstruction {
     const [configPda] = this.deriveConfigPda();
-    const discriminator = getInstructionDiscriminator("update_operator");
-    const data = Buffer.concat([
-      discriminator,
-      newOperator.toBuffer(),
-    ]);
+    const discriminator = getInstructionDiscriminator("remove_allowed_contract");
+    const data = Buffer.concat([discriminator, Buffer.from(evmContract)]);
+
+    const keys = [
+      { pubkey: admin, isSigner: true, isWritable: false },
+      { pubkey: configPda, isSigner: false, isWritable: true },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data,
+    });
+  }
+
+  /**
+   * Build the add_supported_domain instruction.
+   *
+   * On-chain accounts: admin(signer), config(mut)
+   */
+  buildAddSupportedDomainInstruction(
+    admin: PublicKey,
+    domain: number
+  ): TransactionInstruction {
+    const [configPda] = this.deriveConfigPda();
+    const discriminator = getInstructionDiscriminator("add_supported_domain");
+    const domainBuf = Buffer.alloc(4);
+    domainBuf.writeUInt32LE(domain, 0);
+    const data = Buffer.concat([discriminator, domainBuf]);
 
     const keys = [
       { pubkey: admin, isSigner: true, isWritable: false },
@@ -585,229 +764,460 @@ export class BridgeClient {
   }
 
   // --------------------------------------------------------------------------
-  // Private Helpers
+  // Timelocked Admin Instruction Builders (48h delay)
   // --------------------------------------------------------------------------
 
-  /** Deserialize bridge config from raw account data
-   * Field order must match Rust struct:
-   * version, admin, hyperlane_mailbox, sp1_verifier, wrapper_program,
-   * wrapper_config, usdc_mint, wrapper_mint, bridge_usdc_reserve,
-   * is_paused, total_bridged_in, total_bridged_out, nonce,
-   * daily_inflow_volume, daily_inflow_reset_timestamp,
-   * allowed_evm_contracts, supported_domains, admin_action_nonce, bump, _reserved
+  /**
+   * Schedule adding an EVM contract (48h timelock).
+   *
+   * On-chain accounts: admin(signer,mut), config(mut), admin_action(init,mut), system_program
+   */
+  buildScheduleAddEvmContractInstruction(
+    params: ScheduleAdminActionParams,
+    evmContract: Uint8Array // 20 bytes
+  ): TransactionInstruction {
+    const [configPda] = this.deriveConfigPda();
+    const [actionPda] = this.deriveAdminActionPda(params.nonce);
+
+    const discriminator = getInstructionDiscriminator("schedule_add_evm_contract");
+    const data = Buffer.concat([discriminator, Buffer.from(evmContract)]);
+
+    const keys = [
+      { pubkey: params.admin, isSigner: true, isWritable: true },
+      { pubkey: configPda, isSigner: false, isWritable: true },
+      { pubkey: actionPda, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data,
+    });
+  }
+
+  /**
+   * Schedule removing an EVM contract (48h timelock).
+   *
+   * On-chain accounts: admin(signer,mut), config(mut), admin_action(init,mut), system_program
+   */
+  buildScheduleRemoveEvmContractInstruction(
+    params: ScheduleAdminActionParams,
+    evmContract: Uint8Array // 20 bytes
+  ): TransactionInstruction {
+    const [configPda] = this.deriveConfigPda();
+    const [actionPda] = this.deriveAdminActionPda(params.nonce);
+
+    const discriminator = getInstructionDiscriminator("schedule_remove_evm_contract");
+    const data = Buffer.concat([discriminator, Buffer.from(evmContract)]);
+
+    const keys = [
+      { pubkey: params.admin, isSigner: true, isWritable: true },
+      { pubkey: configPda, isSigner: false, isWritable: true },
+      { pubkey: actionPda, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data,
+    });
+  }
+
+  /**
+   * Schedule adding a Hyperlane domain (48h timelock).
+   *
+   * On-chain accounts: admin(signer,mut), config(mut), admin_action(init,mut), system_program
+   */
+  buildScheduleAddDomainInstruction(
+    params: ScheduleAdminActionParams,
+    domain: number
+  ): TransactionInstruction {
+    const [configPda] = this.deriveConfigPda();
+    const [actionPda] = this.deriveAdminActionPda(params.nonce);
+
+    const discriminator = getInstructionDiscriminator("schedule_add_domain");
+    const domainBuf = Buffer.alloc(4);
+    domainBuf.writeUInt32LE(domain, 0);
+    const data = Buffer.concat([discriminator, domainBuf]);
+
+    const keys = [
+      { pubkey: params.admin, isSigner: true, isWritable: true },
+      { pubkey: configPda, isSigner: false, isWritable: true },
+      { pubkey: actionPda, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data,
+    });
+  }
+
+  /**
+   * Schedule removing a Hyperlane domain (48h timelock).
+   *
+   * On-chain accounts: admin(signer,mut), config(mut), admin_action(init,mut), system_program
+   */
+  buildScheduleRemoveDomainInstruction(
+    params: ScheduleAdminActionParams,
+    domain: number
+  ): TransactionInstruction {
+    const [configPda] = this.deriveConfigPda();
+    const [actionPda] = this.deriveAdminActionPda(params.nonce);
+
+    const discriminator = getInstructionDiscriminator("schedule_remove_domain");
+    const domainBuf = Buffer.alloc(4);
+    domainBuf.writeUInt32LE(domain, 0);
+    const data = Buffer.concat([discriminator, domainBuf]);
+
+    const keys = [
+      { pubkey: params.admin, isSigner: true, isWritable: true },
+      { pubkey: configPda, isSigner: false, isWritable: true },
+      { pubkey: actionPda, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data,
+    });
+  }
+
+  /**
+   * Execute a scheduled admin action (after 48h timelock expires).
+   *
+   * On-chain accounts: admin(signer), config(mut), admin_action(mut)
+   */
+  buildExecuteAdminActionInstruction(
+    params: AdminActionNonceParams
+  ): TransactionInstruction {
+    const [configPda] = this.deriveConfigPda();
+    const [actionPda] = this.deriveAdminActionPda(params.nonce);
+
+    const discriminator = getInstructionDiscriminator("execute_admin_action");
+    const nonceBuf = Buffer.alloc(8);
+    nonceBuf.writeBigUInt64LE(BigInt(params.nonce.toString()), 0);
+    const data = Buffer.concat([discriminator, nonceBuf]);
+
+    const keys = [
+      { pubkey: params.admin, isSigner: true, isWritable: false },
+      { pubkey: configPda, isSigner: false, isWritable: true },
+      { pubkey: actionPda, isSigner: false, isWritable: true },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data,
+    });
+  }
+
+  /**
+   * Cancel a scheduled admin action.
+   *
+   * On-chain accounts: admin(signer), config, admin_action(mut)
+   */
+  buildCancelAdminActionInstruction(
+    params: AdminActionNonceParams
+  ): TransactionInstruction {
+    const [configPda] = this.deriveConfigPda();
+    const [actionPda] = this.deriveAdminActionPda(params.nonce);
+
+    const discriminator = getInstructionDiscriminator("cancel_admin_action");
+    const nonceBuf = Buffer.alloc(8);
+    nonceBuf.writeBigUInt64LE(BigInt(params.nonce.toString()), 0);
+    const data = Buffer.concat([discriminator, nonceBuf]);
+
+    const keys = [
+      { pubkey: params.admin, isSigner: true, isWritable: false },
+      { pubkey: configPda, isSigner: false, isWritable: false },
+      { pubkey: actionPda, isSigner: false, isWritable: true },
+    ];
+
+    return new TransactionInstruction({
+      programId: this.programId,
+      keys,
+      data,
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // SP1 Public Inputs Helpers
+  // --------------------------------------------------------------------------
+
+  /**
+   * Borsh-serialize SP1 public inputs for on-chain verification.
+   *
+   * Takes the JSON output from `x0-sp1-host prove` and produces the
+   * `publicValues` buffer expected by `buildVerifyEvmProofInstruction`.
+   *
+   * Borsh layout (must match SP1PublicInputs in x0-bridge state.rs):
+   *   block_hash([u8;32]) + block_number(u64) + tx_hash([u8;32])
+   *   + from([u8;20]) + to([u8;20]) + value(u64) + success(bool)
+   *   + event_logs(Vec<EVMEventLog>)
+   *
+   * @example
+   * ```ts
+   * const inputs = JSON.parse(fs.readFileSync("public_inputs.json", "utf-8"));
+   * const publicValues = bridge.serializeSP1PublicInputs(inputs);
+   * const proofData = Buffer.from(fs.readFileSync("proof.bin"));
+   * const ix = bridge.buildVerifyEvmProofInstruction({
+   *   messageId, proofData, publicValues, payer, sp1Verifier
+   * });
+   * ```
+   */
+  serializeSP1PublicInputs(inputs: SP1PublicInputs): Buffer {
+    const parts: Buffer[] = [];
+
+    // block_hash: [u8; 32] — fixed array, no length prefix
+    parts.push(Buffer.from(new Uint8Array(inputs.block_hash)));
+
+    // block_number: u64 LE
+    const blockNumBuf = Buffer.alloc(8);
+    blockNumBuf.writeBigUInt64LE(BigInt(inputs.block_number), 0);
+    parts.push(blockNumBuf);
+
+    // tx_hash: [u8; 32]
+    parts.push(Buffer.from(new Uint8Array(inputs.tx_hash)));
+
+    // from: [u8; 20]
+    parts.push(Buffer.from(new Uint8Array(inputs.from)));
+
+    // to: [u8; 20]
+    parts.push(Buffer.from(new Uint8Array(inputs.to)));
+
+    // value: u64 LE
+    const valueBuf = Buffer.alloc(8);
+    valueBuf.writeBigUInt64LE(BigInt(inputs.value), 0);
+    parts.push(valueBuf);
+
+    // success: bool (1 byte)
+    parts.push(Buffer.from([inputs.success ? 1 : 0]));
+
+    // event_logs: Vec<EVMEventLog> — u32 LE length prefix + each item
+    const logsLenBuf = Buffer.alloc(4);
+    logsLenBuf.writeUInt32LE(inputs.event_logs.length, 0);
+    parts.push(logsLenBuf);
+
+    for (const log of inputs.event_logs) {
+      // contract_address: [u8; 20]
+      parts.push(Buffer.from(new Uint8Array(log.contract_address)));
+
+      // topics: Vec<[u8; 32]> — u32 LE length + each 32 bytes
+      const topicsLenBuf = Buffer.alloc(4);
+      topicsLenBuf.writeUInt32LE(log.topics.length, 0);
+      parts.push(topicsLenBuf);
+      for (const topic of log.topics) {
+        parts.push(Buffer.from(new Uint8Array(topic)));
+      }
+
+      // data: Vec<u8> — u32 LE length + bytes
+      const dataLenBuf = Buffer.alloc(4);
+      dataLenBuf.writeUInt32LE(log.data.length, 0);
+      parts.push(dataLenBuf);
+      parts.push(Buffer.from(new Uint8Array(log.data)));
+    }
+
+    return Buffer.concat(parts);
+  }
+
+  /**
+   * Deserialize SP1 public inputs from a borsh-encoded buffer back
+   * into the JS object. Useful for inspecting on-chain proof context
+   * public values.
+   */
+  deserializeSP1PublicInputs(buf: Buffer): SP1PublicInputs {
+    let offset = 0;
+
+    const block_hash = Array.from(buf.subarray(offset, offset + 32)); offset += 32;
+    const block_number = Number(buf.readBigUInt64LE(offset)); offset += 8;
+    const tx_hash = Array.from(buf.subarray(offset, offset + 32)); offset += 32;
+    const from = Array.from(buf.subarray(offset, offset + 20)); offset += 20;
+    const to = Array.from(buf.subarray(offset, offset + 20)); offset += 20;
+    const value = Number(buf.readBigUInt64LE(offset)); offset += 8;
+    const success = buf[offset] === 1; offset += 1;
+
+    const logsLen = buf.readUInt32LE(offset); offset += 4;
+    const event_logs: SP1EventLog[] = [];
+    for (let i = 0; i < logsLen; i++) {
+      const contract_address = Array.from(buf.subarray(offset, offset + 20)); offset += 20;
+
+      const topicsLen = buf.readUInt32LE(offset); offset += 4;
+      const topics: number[][] = [];
+      for (let j = 0; j < topicsLen; j++) {
+        topics.push(Array.from(buf.subarray(offset, offset + 32))); offset += 32;
+      }
+
+      const dataLen = buf.readUInt32LE(offset); offset += 4;
+      const data = Array.from(buf.subarray(offset, offset + dataLen)); offset += dataLen;
+
+      event_logs.push({ contract_address, topics, data });
+    }
+
+    return { block_hash, block_number, tx_hash, from, to, value, success, event_logs };
+  }
+
+  // --------------------------------------------------------------------------
+  // Private Helpers — Deserialization
+  // --------------------------------------------------------------------------
+
+  /**
+   * Deserialize BridgeConfig from raw account data.
+   *
+   * Field order matches Rust struct:
+   *   version, admin, hyperlane_mailbox, sp1_verifier, wrapper_program,
+   *   wrapper_config, usdc_mint, wrapper_mint, bridge_usdc_reserve,
+   *   is_paused, total_bridged_in, total_bridged_out, nonce,
+   *   daily_inflow_volume, daily_inflow_reset_timestamp,
+   *   allowed_evm_contracts, supported_domains, admin_action_nonce,
+   *   bump, _reserved
    */
   private deserializeBridgeConfig(data: Buffer): BridgeConfig {
     let offset = 8; // Skip Anchor discriminator
 
-    // version: u8
-    const version = data[offset];
-    offset += 1;
+    const version = data[offset]; offset += 1;
+    const admin = new PublicKey(data.subarray(offset, offset + 32)); offset += 32;
+    const hyperlaneMailbox = new PublicKey(data.subarray(offset, offset + 32)); offset += 32;
+    const sp1Verifier = new PublicKey(data.subarray(offset, offset + 32)); offset += 32;
+    const wrapperProgram = new PublicKey(data.subarray(offset, offset + 32)); offset += 32;
+    const wrapperConfig = new PublicKey(data.subarray(offset, offset + 32)); offset += 32;
+    const usdcMint = new PublicKey(data.subarray(offset, offset + 32)); offset += 32;
+    const wrapperMint = new PublicKey(data.subarray(offset, offset + 32)); offset += 32;
+    const bridgeUsdcReserve = new PublicKey(data.subarray(offset, offset + 32)); offset += 32;
+    const isPaused = data[offset] === 1; offset += 1;
+    const totalBridgedIn = new BN(data.subarray(offset, offset + 8), "le"); offset += 8;
+    const totalBridgedOut = new BN(data.subarray(offset, offset + 8), "le"); offset += 8;
+    const nonce = new BN(data.subarray(offset, offset + 8), "le"); offset += 8;
+    const dailyInflowVolume = new BN(data.subarray(offset, offset + 8), "le"); offset += 8;
+    const dailyInflowResetTimestamp = new BN(data.subarray(offset, offset + 8), "le"); offset += 8;
 
-    // admin: Pubkey
-    const admin = new PublicKey(data.subarray(offset, offset + 32));
-    offset += 32;
-
-    // hyperlane_mailbox: Pubkey
-    const hyperlaneMailbox = new PublicKey(data.subarray(offset, offset + 32));
-    offset += 32;
-
-    // sp1_verifier: Pubkey
-    const sp1Verifier = new PublicKey(data.subarray(offset, offset + 32));
-    offset += 32;
-
-    // wrapper_program: Pubkey
-    const wrapperProgram = new PublicKey(data.subarray(offset, offset + 32));
-    offset += 32;
-
-    // wrapper_config: Pubkey
-    const wrapperConfig = new PublicKey(data.subarray(offset, offset + 32));
-    offset += 32;
-
-    // usdc_mint: Pubkey
-    const usdcMint = new PublicKey(data.subarray(offset, offset + 32));
-    offset += 32;
-
-    // wrapper_mint: Pubkey
-    const wrapperMint = new PublicKey(data.subarray(offset, offset + 32));
-    offset += 32;
-
-    // bridge_usdc_reserve: Pubkey
-    const bridgeUsdcReserve = new PublicKey(data.subarray(offset, offset + 32));
-    offset += 32;
-
-    // is_paused: bool
-    const isPaused = data[offset] === 1;
-    offset += 1;
-
-    // total_bridged_in: u64
-    const totalBridgedIn = new BN(data.subarray(offset, offset + 8), "le");
-    offset += 8;
-
-    // total_bridged_out: u64
-    const totalBridgedOut = new BN(data.subarray(offset, offset + 8), "le");
-    offset += 8;
-
-    // nonce: u64
-    const nonce = new BN(data.subarray(offset, offset + 8), "le");
-    offset += 8;
-
-    // daily_inflow_volume: u64
-    const dailyInflowVolume = new BN(data.subarray(offset, offset + 8), "le");
-    offset += 8;
-
-    // daily_inflow_reset_timestamp: i64
-    const dailyInflowResetTimestamp = new BN(data.subarray(offset, offset + 8), "le");
-    offset += 8;
-
-    // Vec<[u8; 20]> allowed_evm_contracts
-    const contractsLen = data.readUInt32LE(offset);
-    offset += 4;
+    // allowed_evm_contracts_count: u8
+    const contractsCount = data[offset]; offset += 1;
+    // allowed_evm_contracts: [[u8; 20]; 10] — fixed array, always 200 bytes
     const allowedEvmContracts: Uint8Array[] = [];
-    for (let i = 0; i < contractsLen; i++) {
-      allowedEvmContracts.push(
-        new Uint8Array(data.subarray(offset, offset + 20))
-      );
+    for (let i = 0; i < 10; i++) {
+      if (i < contractsCount) {
+        allowedEvmContracts.push(new Uint8Array(data.subarray(offset, offset + 20)));
+      }
       offset += 20;
     }
 
-    // Vec<u32> supported_domains
-    const domainsLen = data.readUInt32LE(offset);
-    offset += 4;
+    // supported_domains_count: u8
+    const domainsCount = data[offset]; offset += 1;
+    // supported_domains: [u32; 10] — fixed array, always 40 bytes
     const supportedDomains: number[] = [];
-    for (let i = 0; i < domainsLen; i++) {
-      supportedDomains.push(data.readUInt32LE(offset));
+    for (let i = 0; i < 10; i++) {
+      if (i < domainsCount) {
+        supportedDomains.push(data.readUInt32LE(offset));
+      }
       offset += 4;
     }
 
-    // admin_action_nonce: u64
-    const adminActionNonce = new BN(data.subarray(offset, offset + 8), "le");
-    offset += 8;
-
-    // bump: u8
-    const bump = data[offset];
-    offset += 1;
-
-    // _reserved: [u8; 56] - skip
+    const adminActionNonce = new BN(data.subarray(offset, offset + 8), "le"); offset += 8;
+    const bump = data[offset]; offset += 1;
+    // _reserved: [u8; 56] — skip
 
     return {
-      version,
-      admin,
-      hyperlaneMailbox,
-      sp1Verifier,
-      wrapperProgram,
-      wrapperConfig,
-      usdcMint,
-      wrapperMint,
-      bridgeUsdcReserve,
-      isPaused,
-      totalBridgedIn,
-      totalBridgedOut,
-      nonce,
-      dailyInflowVolume,
-      dailyInflowResetTimestamp,
-      allowedEvmContracts,
-      supportedDomains,
-      adminActionNonce,
-      bump,
+      version, admin, hyperlaneMailbox, sp1Verifier,
+      wrapperProgram, wrapperConfig, usdcMint, wrapperMint,
+      bridgeUsdcReserve, isPaused, totalBridgedIn, totalBridgedOut,
+      nonce, dailyInflowVolume, dailyInflowResetTimestamp,
+      allowedEvmContracts, supportedDomains, adminActionNonce, bump,
     };
   }
 
-  /** Deserialize bridge message from raw account data */
+  /**
+   * Deserialize BridgeMessage from raw account data.
+   *
+   * Field order matches Rust struct:
+   *   version(u8), message_id([u8;32]), origin_domain(u32),
+   *   sender([u8;32]), recipient(Pubkey), amount(u64),
+   *   received_at(i64), status(enum u8), evm_tx_hash([u8;32]),
+   *   nonce(u64), bump(u8), _reserved([u8;32])
+   */
   private deserializeBridgeMessage(data: Buffer): BridgeMessage {
     let offset = 8; // Skip Anchor discriminator
 
-    const originDomain = data.readUInt32LE(offset);
-    offset += 4;
-    const sender = new Uint8Array(data.subarray(offset, offset + 20));
-    offset += 20;
-    const recipient = new PublicKey(data.subarray(offset, offset + 32));
-    offset += 32;
-    const amount = new BN(data.subarray(offset, offset + 8), "le");
-    offset += 8;
-    const nonce = new BN(data.subarray(offset, offset + 8), "le");
-    offset += 8;
-    const messageId = new Uint8Array(data.subarray(offset, offset + 32));
-    offset += 32;
-    const hyperlaneMessageId = new Uint8Array(
-      data.subarray(offset, offset + 32)
-    );
-    offset += 32;
-    const receivedAt = new BN(data.subarray(offset, offset + 8), "le");
-    offset += 8;
-    const statusByte = data[offset];
-    offset += 1;
-    const status: BridgeMessageStatus = statusByte;
-    const bump = data[offset];
-    offset += 1;
-    const version = data[offset];
-    offset += 1;
+    const version = data[offset]; offset += 1;
+    const messageId = new Uint8Array(data.subarray(offset, offset + 32)); offset += 32;
+    const originDomain = data.readUInt32LE(offset); offset += 4;
+    const sender = new Uint8Array(data.subarray(offset, offset + 32)); offset += 32;
+    const recipient = new PublicKey(data.subarray(offset, offset + 32)); offset += 32;
+    const amount = new BN(data.subarray(offset, offset + 8), "le"); offset += 8;
+    const receivedAt = new BN(data.subarray(offset, offset + 8), "le"); offset += 8;
+    const status: BridgeMessageStatus = data[offset]; offset += 1;
+    const evmTxHash = new Uint8Array(data.subarray(offset, offset + 32)); offset += 32;
+    const nonce = new BN(data.subarray(offset, offset + 8), "le"); offset += 8;
+    const bump = data[offset]; offset += 1;
+    // _reserved: [u8; 32] — skip
 
     return {
-      originDomain,
-      sender,
-      recipient,
-      amount,
-      nonce,
-      messageId,
-      hyperlaneMessageId,
-      receivedAt,
-      status,
-      bump,
-      version,
+      version, messageId, originDomain, sender,
+      recipient, amount, receivedAt, status,
+      evmTxHash, nonce, bump,
     };
   }
 
-  /** Deserialize EVM proof context from raw account data */
+  /**
+   * Deserialize EVMProofContext from raw account data.
+   *
+   * Field order matches Rust struct:
+   *   version(u8), proof_type(enum u8), verified(bool u8),
+   *   verified_at(i64), block_hash([u8;32]), block_number(u64),
+   *   tx_hash([u8;32]), from([u8;20]), to([u8;20]), value(u64),
+   *   event_logs(Vec<EVMEventLog>), message_id([u8;32]),
+   *   bump(u8), _reserved([u8;32])
+   */
   private deserializeEVMProofContext(data: Buffer): EVMProofContext {
     let offset = 8; // Skip Anchor discriminator
 
-    const version = data[offset];
-    offset += 1;
-    const proofType: EVMProofType = data[offset];
-    offset += 1;
-    const verified = data[offset] === 1;
-    offset += 1;
-    const verifiedAt = new BN(data.subarray(offset, offset + 8), "le");
-    offset += 8;
-    const blockHash = new Uint8Array(data.subarray(offset, offset + 32));
-    offset += 32;
-    const blockNumber = new BN(data.subarray(offset, offset + 8), "le");
-    offset += 8;
-    const txHash = new Uint8Array(data.subarray(offset, offset + 32));
-    offset += 32;
-    const evmSender = new Uint8Array(data.subarray(offset, offset + 20));
-    offset += 20;
-    const evmContract = new Uint8Array(data.subarray(offset, offset + 20));
-    offset += 20;
-    const amount = new BN(data.subarray(offset, offset + 8), "le");
-    offset += 8;
-    const solanaRecipient = new PublicKey(data.subarray(offset, offset + 32));
-    offset += 32;
-    const nonce = new BN(data.subarray(offset, offset + 8), "le");
-    offset += 8;
-    const eventSignature = new Uint8Array(data.subarray(offset, offset + 32));
-    offset += 32;
-    const isConsumed = data[offset] === 1;
-    offset += 1;
-    const bump = data[offset];
-    offset += 1;
+    const version = data[offset]; offset += 1;
+    const proofType: EVMProofType = data[offset]; offset += 1;
+    const verified = data[offset] === 1; offset += 1;
+    const verifiedAt = new BN(data.subarray(offset, offset + 8), "le"); offset += 8;
+    const blockHash = new Uint8Array(data.subarray(offset, offset + 32)); offset += 32;
+    const blockNumber = new BN(data.subarray(offset, offset + 8), "le"); offset += 8;
+    const txHash = new Uint8Array(data.subarray(offset, offset + 32)); offset += 32;
+    const from = new Uint8Array(data.subarray(offset, offset + 20)); offset += 20;
+    const to = new Uint8Array(data.subarray(offset, offset + 20)); offset += 20;
+    const value = new BN(data.subarray(offset, offset + 8), "le"); offset += 8;
+
+    // Vec<EVMEventLog> event_logs
+    const logsLen = data.readUInt32LE(offset); offset += 4;
+    const eventLogs: EVMEventLog[] = [];
+    for (let i = 0; i < logsLen; i++) {
+      // contract_address: [u8; 20]
+      const contractAddress = new Uint8Array(data.subarray(offset, offset + 20));
+      offset += 20;
+
+      // topics: Vec<[u8; 32]>
+      const topicsLen = data.readUInt32LE(offset); offset += 4;
+      const topics: Uint8Array[] = [];
+      for (let j = 0; j < topicsLen; j++) {
+        topics.push(new Uint8Array(data.subarray(offset, offset + 32)));
+        offset += 32;
+      }
+
+      // data: Vec<u8>
+      const dataLen = data.readUInt32LE(offset); offset += 4;
+      const logData = new Uint8Array(data.subarray(offset, offset + dataLen));
+      offset += dataLen;
+
+      eventLogs.push({ contractAddress, topics, data: logData });
+    }
+
+    const messageId = new Uint8Array(data.subarray(offset, offset + 32)); offset += 32;
+    const bump = data[offset]; offset += 1;
+    // _reserved: [u8; 32] — skip
 
     return {
-      version,
-      proofType,
-      verified,
-      verifiedAt,
-      blockHash,
-      blockNumber,
-      txHash,
-      evmSender,
-      evmContract,
-      amount,
-      solanaRecipient,
-      nonce,
-      eventSignature,
-      isConsumed,
-      bump,
+      version, proofType, verified, verifiedAt,
+      blockHash, blockNumber, txHash, from, to, value,
+      eventLogs, messageId, bump,
     };
   }
 }
