@@ -9,7 +9,7 @@ use alloy_rpc_types::{Block, TransactionReceipt};
 use alloy_consensus::TxType;
 use anyhow::{anyhow, bail, Context, Result};
 use tiny_keccak::{Hasher, Keccak};
-use x0_sp1_common::EVMProofWitness;
+use x0_sp1_evm_common::EVMProofWitness;
 
 /// Fetch all EVM artifacts needed for proof generation
 ///

@@ -18,18 +18,12 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use sha2::{Digest, Sha256};
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::pubkey::Pubkey;
 use std::str::FromStr;
-use tracing::{info, warn};
-use x0_sp1_solana_common::{
-    BankHashComponents, ParsedBridgeOutMessage, SolanaProofWitness, ValidatorSignature,
-    ValidatorStake,
-};
-
-mod fetcher;
-mod prover;
+use tracing::info;
+use x0_sp1_solana_common::ParsedBridgeOutMessage;
+use x0_sp1_solana_host::{fetcher, prover};
 
 /// SP1 Solana State Proof Generator for x0 Outbound Bridge
 #[derive(Parser, Debug)]
@@ -167,7 +161,6 @@ async fn main() -> Result<()> {
         &bridge_program,
         &pda,
         &account,
-        args.nonce,
     )
     .await
     .context("Failed to fetch witness data")?;

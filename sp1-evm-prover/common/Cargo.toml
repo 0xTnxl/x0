@@ -1,11 +1,11 @@
 [package]
-name = "x0-sp1-common"
+name = "x0-sp1-evm-common"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Shared types between SP1 guest and host programs for x0 EVM bridge proofs"
+description = "Shared types between SP1 guest and host for x0 EVM (Base) inbound bridge proofs"
 
 [dependencies]
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }

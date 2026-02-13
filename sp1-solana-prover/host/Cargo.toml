@@ -9,11 +9,13 @@ description = "SP1 host program: fetches Solana state and generates STARK proofs
 
 [dependencies]
 x0-sp1-solana-common = { path = "../common" }
-sp1-sdk = "3.0"
+sp1-sdk = { workspace = true }
 tokio = { version = "1", features = ["full"] }
-solana-client = "1.18"
-solana-sdk = "1.18"
-solana-account-decoder = "1.18"
+solana-client = "2.1"
+solana-sdk = "2.1"
+solana-account-decoder = "2.1"
+solana-transaction-status = "2.1"
+bs58 = "0.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 borsh = "0.10"
@@ -24,5 +26,4 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 bincode = "1.3"
 base64 = "0.22"
-base58 = "0.2"
 sha2 = "0.10"

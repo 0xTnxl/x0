@@ -276,7 +276,7 @@ export interface AdminActionNonceParams {
  * SP1 STARK proof public inputs — the JSON shape output by
  * `x0-sp1-host prove --public-inputs-output public_inputs.json`.
  *
- * Matches `EVMProofPublicInputs` in sp1-prover/common and
+ * Matches `EVMProofPublicInputs` in sp1-evm-prover/common and
  * `SP1PublicInputs` in programs/x0-bridge/src/state.rs.
  *
  * These are the values cryptographically committed inside the STARK
@@ -301,7 +301,7 @@ export interface SP1PublicInputs {
   event_logs: SP1EventLog[];
 }
 
-/** Event log entry in SP1 public inputs JSON (matches sp1-prover EventLog) */
+/** Event log entry in SP1 public inputs JSON (matches sp1-evm-prover EventLog) */
 export interface SP1EventLog {
   /** Contract that emitted the event (20 bytes as number array) */
   contract_address: number[];

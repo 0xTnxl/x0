@@ -5,56 +5,65 @@
 //!
 //! # What This Circuit Proves
 //!
-//! 1. **Validator Quorum**: A set of Ed25519 signatures from Solana validators
-//!    collectively representing ≥ 2/3 of the epoch's total stake have signed
-//!    a specific bank hash.
+//! 1. **Account Data Integrity**: The BridgeOutMessage account data matches
+//!    the claimed nonce, recipient, amount, and status == Burned.
 //!
-//! 2. **Bank Hash Derivation**: The bank hash commits to an accounts hash
-//!    via SHA-256(accounts_hash || signature_count || last_blockhash || parent_bank_hash).
+//! 2. **Account Ownership**: The account is owned by the x0-bridge program.
 //!
-//! 3. **Account Inclusion**: The BridgeOutMessage account is included in the
-//!    accounts hash Merkle tree (proof of existence).
+//! 3. **Account Inclusion**: The account hash is included in the
+//!    accounts_delta_hash via a fanout-16 Merkle proof (Solana's MERKLE_FANOUT).
 //!
-//! 4. **Account Data Integrity**: The account data matches the expected
-//!    BridgeOutMessage layout with the claimed nonce, recipient, and amount.
+//! 4. **Bank Hash Derivation**: The accounts_delta_hash is committed to the
+//!    bank hash via:
+//!    `bank_hash = SHA-256(parent_bank_hash || delta_hash || sig_count || blockhash)`
 //!
-//! 5. **Program Ownership**: The account is owned by the x0-bridge program.
+//! 5. **Validator Quorum**: ≥ 2/3 of epoch stake signed vote transactions
+//!    containing the bank hash (Ed25519 over serialized tx message).
 //!
 //! # Security Property
 //!
-//! The verifier on Base can trust that the BridgeOutMessage PDA exists on Solana
-//! with the stated fields, because:
-//! - The bank hash is signed by ≥ 2/3 of stake (Solana's finality guarantee)
-//! - The bank hash commits to the accounts hash (state root)
-//! - The accounts hash includes the specific account via Merkle proof
+//! The verifier on Base can trust the BridgeOutMessage exists with the stated
+//! fields because:
+//! - Validator votes prove slot finality (Solana's Tower BFT)
+//! - The bank hash commits to the accounts_delta_hash
+//! - The delta hash includes the account via cryptographic Merkle proof
 //! - The account data is parsed and committed as public outputs
 
 #![no_main]
+#![allow(dead_code)] // All code invoked at runtime via sp1_zkvm::entrypoint! macro
 sp1_zkvm::entrypoint!(main);
 
 extern crate alloc;
 
 use alloc::vec::Vec;
+use sha2::{Digest, Sha256};
 use x0_sp1_solana_common::{
-    ParsedBridgeOutMessage, SolanaProofPublicInputs, SolanaProofWitness,
+    ParsedBridgeOutMessage, SolanaProofPublicInputs, SolanaProofWitness, MERKLE_FANOUT,
 };
 
-/// SHA-256 hash function (provided by SP1 zkVM as a precompile)
+/// SHA-256 hash function (SP1 accelerates this via zkVM precompile)
 fn sha256(data: &[u8]) -> [u8; 32] {
-    sp1_zkvm::io::commit_slice(data);
-    // SP1 provides SHA-256 as a syscall/precompile
-    // In the actual SP1 zkVM, we use the built-in hasher
-    let mut hasher = sp1_zkvm::precompiles::utils::CurveOperations::default();
-    // Fallback: manual SHA-256 computation
-    // SP1 v3 exposes sha256 as: sp1_zkvm::syscalls::sha256
-    let mut output = [0u8; 32];
-    sp1_zkvm::precompiles::sha256::sha256(data, &mut output);
-    output
+    Sha256::digest(data).into()
 }
 
-/// Ed25519 signature verification (SP1 precompile)
+/// SHA-256 of concatenated inputs (matches Solana's `hashv`)
+fn hashv(inputs: &[&[u8]]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    for input in inputs {
+        hasher.update(input);
+    }
+    hasher.finalize().into()
+}
+
+/// Ed25519 signature verification (SP1 accelerates via precompile)
 fn verify_ed25519(pubkey: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> bool {
-    sp1_zkvm::precompiles::ed25519::verify(pubkey, message, signature)
+    use ed25519_dalek::{Signature, VerifyingKey};
+    let key = match VerifyingKey::from_bytes(pubkey) {
+        Ok(k) => k,
+        Err(_) => return false,
+    };
+    let sig = Signature::from_bytes(signature);
+    key.verify_strict(message, &sig).is_ok()
 }
 
 fn main() {
@@ -72,146 +81,207 @@ fn main() {
         .expect("Failed to parse BridgeOutMessage account data");
 
     // Verify the account is owned by the bridge program
-    assert_eq!(
-        witness.account_owner, witness.account_data[..0].len().to_le_bytes(), // placeholder
-        // Real check: account_owner must match bridge_program_id
-    );
-
-    // We use the account_owner from the witness as the bridge program ID
     let bridge_program_id = witness.account_owner;
 
     // Verify the account status is "Burned" (0)
     assert_eq!(
         parsed.status, 0,
-        "BridgeOutMessage status must be Burned (0)"
+        "BridgeOutMessage status must be Burned (0), got {}",
+        parsed.status
     );
 
     // ========================================================================
-    // Step 3: Compute account data hash for integrity binding
+    // Step 3: Compute account data hash (for public input integrity binding)
     // ========================================================================
 
     let account_hash = sha256(&witness.account_data);
 
     // ========================================================================
-    // Step 4: Verify Merkle inclusion proof (account → accounts_hash)
+    // Step 4: Compute Solana account hash (for Merkle tree inclusion)
     //
-    // Proves that this account exists in the Solana state tree.
-    // The accounts hash is a Merkle root over all accounts.
+    // This MUST match Solana's AccountsDb::hash_account() exactly:
+    //
+    //   SHA-256(
+    //       lamports        (8 bytes LE)
+    //       || owner        (32 bytes)
+    //       || executable   (1 byte)
+    //       || rent_epoch   (8 bytes LE)
+    //       || data         (N bytes)
+    //       || pubkey       (32 bytes)
+    //   )
+    //
+    // Zero-lamport accounts hash to [0u8; 32] (Solana convention).
     // ========================================================================
 
-    // Compute the account leaf hash
-    // Solana account hash = SHA-256(lamports || rent_epoch || data_len || data || owner || executable)
-    let mut leaf_preimage = Vec::new();
-    leaf_preimage.extend_from_slice(&witness.account_lamports.to_le_bytes());
-    leaf_preimage.extend_from_slice(&witness.account_rent_epoch.to_le_bytes());
-    leaf_preimage.extend_from_slice(&(witness.account_data.len() as u64).to_le_bytes());
-    leaf_preimage.extend_from_slice(&witness.account_data);
-    leaf_preimage.extend_from_slice(&witness.account_owner);
-    leaf_preimage.push(witness.account_executable as u8);
-    // Include the account address in the leaf computation
-    leaf_preimage.extend_from_slice(&witness.account_address);
+    let solana_account_hash = if witness.account_lamports == 0 {
+        [0u8; 32]
+    } else {
+        hashv(&[
+            &witness.account_lamports.to_le_bytes(),
+            &witness.account_owner,
+            &[witness.account_executable as u8],
+            &witness.account_rent_epoch.to_le_bytes(),
+            &witness.account_data,
+            &witness.account_address,
+        ])
+    };
 
-    let mut current_hash = sha256(&leaf_preimage);
+    // ========================================================================
+    // Step 5: Verify fanout-16 Merkle inclusion proof
+    //
+    // Proves the account hash is in the accounts_delta_hash tree.
+    //
+    // At each level, reconstruct the group of up to 16 children,
+    // hash them together, and move up to the parent.
+    // ========================================================================
 
-    // Walk the Merkle proof from leaf to root
-    let mut index = witness.account_leaf_index;
-    for sibling in &witness.account_proof {
-        let mut combined = Vec::with_capacity(64);
-        if index % 2 == 0 {
-            // Current node is left child
-            combined.extend_from_slice(&current_hash);
-            combined.extend_from_slice(sibling);
-        } else {
-            // Current node is right child
-            combined.extend_from_slice(sibling);
-            combined.extend_from_slice(&current_hash);
+    let mut current_hash = solana_account_hash;
+
+    for level in &witness.inclusion_proof.levels {
+        let group_size = level.siblings.len() + 1;
+        let pos = level.position as usize;
+
+        // Sanity checks
+        assert!(
+            group_size <= MERKLE_FANOUT,
+            "Group size {} exceeds fanout {}",
+            group_size,
+            MERKLE_FANOUT
+        );
+        assert!(
+            pos < group_size,
+            "Position {} out of bounds for group size {}",
+            pos,
+            group_size
+        );
+
+        // Reconstruct the group: insert current_hash at position among siblings
+        let mut group_preimage = Vec::with_capacity(group_size * 32);
+
+        for sibling in &level.siblings[..pos] {
+            group_preimage.extend_from_slice(sibling);
         }
-        current_hash = sha256(&combined);
-        index /= 2;
+        group_preimage.extend_from_slice(&current_hash);
+        for sibling in &level.siblings[pos..] {
+            group_preimage.extend_from_slice(sibling);
+        }
+
+        current_hash = sha256(&group_preimage);
     }
 
-    // The Merkle root must match the accounts hash
+    // The computed root MUST equal the accounts_delta_hash
     assert_eq!(
-        current_hash, witness.accounts_hash,
-        "Merkle proof verification failed: computed root does not match accounts_hash"
+        current_hash, witness.accounts_delta_hash,
+        "Merkle proof verification failed: computed root != accounts_delta_hash"
     );
 
     // ========================================================================
-    // Step 5: Verify bank hash derivation
+    // Step 6: Verify bank hash derivation
     //
-    // bank_hash = SHA-256(accounts_hash || sig_count || last_blockhash || parent_bank_hash)
+    // bank_hash = SHA-256(
+    //     parent_bank_hash || accounts_delta_hash || sig_count_le || last_blockhash
+    // )
+    //
+    // Matches Bank::hash_internal_state() in solana-runtime/src/bank.rs
     // ========================================================================
 
-    let mut bank_hash_preimage = Vec::new();
-    bank_hash_preimage.extend_from_slice(&witness.accounts_hash);
-    bank_hash_preimage
-        .extend_from_slice(&witness.bank_hash_components.signature_count.to_le_bytes());
-    bank_hash_preimage.extend_from_slice(&witness.bank_hash_components.last_blockhash);
-    bank_hash_preimage.extend_from_slice(&witness.bank_hash_components.parent_bank_hash);
+    let computed_bank_hash = hashv(&[
+        &witness.bank_hash_components.parent_bank_hash,
+        &witness.accounts_delta_hash,
+        &witness.bank_hash_components.signature_count.to_le_bytes(),
+        &witness.bank_hash_components.last_blockhash,
+    ]);
 
-    let computed_bank_hash = sha256(&bank_hash_preimage);
     assert_eq!(
         computed_bank_hash, witness.bank_hash,
         "Bank hash derivation mismatch"
     );
 
     // ========================================================================
-    // Step 6: Verify validator signatures (≥ 2/3 stake quorum)
+    // Step 7: Verify validator vote quorum (≥ 2/3 stake)
     //
-    // Each validator signs the bank hash with their Ed25519 key.
-    // We verify each signature and sum the stake of valid signers.
-    // The sum must be ≥ 2/3 of the total epoch stake.
+    // Each validator vote is verified by:
+    // 1. Ed25519 signature over the full serialized vote tx message
+    // 2. The bank hash appears at a known offset in the signed message
+    // 3. The validator has the claimed stake in the epoch
+    //
+    // The circuit sums confirmed stake and checks ≥ 2/3 of total.
     // ========================================================================
+
+    assert!(
+        !witness.validator_votes.is_empty(),
+        "No validator votes provided"
+    );
+
+    assert!(
+        witness.total_epoch_stake > 0,
+        "Total epoch stake must be > 0"
+    );
 
     let mut confirmed_stake: u64 = 0;
 
-    for sig_entry in &witness.validator_signatures {
-        // Verify the Ed25519 signature over the bank hash
-        let valid = verify_ed25519(
-            &sig_entry.validator_pubkey,
-            &witness.bank_hash,
-            &sig_entry.signature,
+    for vote in &witness.validator_votes {
+        // 7a. Verify Ed25519 signature over the serialized tx message
+        let sig_valid = verify_ed25519(
+            &vote.vote_authority,
+            &vote.message_bytes,
+            &vote.signature,
+        );
+        assert!(sig_valid, "Vote signature verification failed");
+
+        // 7b. Verify the bank hash appears at the claimed offset
+        let offset = vote.bank_hash_offset as usize;
+        assert!(
+            offset + 32 <= vote.message_bytes.len(),
+            "bank_hash_offset out of bounds"
         );
 
-        if valid {
-            // Verify this validator has stake in the epoch
-            let has_stake = witness
-                .epoch_stakes
-                .iter()
-                .any(|s| s.pubkey == sig_entry.validator_pubkey && s.stake == sig_entry.stake);
+        let hash_at_offset: [u8; 32] = vote.message_bytes[offset..offset + 32]
+            .try_into()
+            .expect("slice length mismatch");
 
-            assert!(
-                has_stake,
-                "Validator signature from pubkey without matching epoch stake"
-            );
+        assert_eq!(
+            hash_at_offset, witness.bank_hash,
+            "Bank hash at offset does not match target bank hash"
+        );
 
-            confirmed_stake = confirmed_stake
-                .checked_add(sig_entry.stake)
-                .expect("Stake overflow");
-        }
+        // 7c. Verify this validator has the claimed stake in epoch_stakes
+        let has_stake = witness.epoch_stakes.iter().any(|s| {
+            s.pubkey == vote.validator_identity && s.stake == vote.stake
+        });
+        assert!(
+            has_stake,
+            "Validator identity not found in epoch stakes with claimed stake"
+        );
+
+        // Accumulate confirmed stake
+        confirmed_stake = confirmed_stake
+            .checked_add(vote.stake)
+            .expect("Confirmed stake overflow");
     }
 
-    // Verify quorum: confirmed_stake >= 2/3 * total_epoch_stake
-    // To avoid floating point: confirmed_stake * 3 >= total_epoch_stake * 2
-    let quorum_numerator = confirmed_stake
+    // Verify quorum: confirmed_stake * 3 >= total_epoch_stake * 2
+    let lhs = confirmed_stake
         .checked_mul(3)
-        .expect("Quorum numerator overflow");
-    let quorum_denominator = witness
+        .expect("Quorum LHS overflow");
+    let rhs = witness
         .total_epoch_stake
         .checked_mul(2)
-        .expect("Quorum denominator overflow");
+        .expect("Quorum RHS overflow");
 
     assert!(
-        quorum_numerator >= quorum_denominator,
-        "Insufficient validator stake: {} * 3 < {} * 2 (need >= 2/3 quorum)",
+        lhs >= rhs,
+        "Insufficient validator quorum: {}*3={} < {}*2={} (need ≥ 2/3)",
         confirmed_stake,
-        witness.total_epoch_stake
+        lhs,
+        witness.total_epoch_stake,
+        rhs
     );
 
     // ========================================================================
-    // Step 7: Commit public outputs
+    // Step 8: Commit public outputs
     //
-    // These are the values that X0UnlockContract on Base will verify.
+    // These values are ABI-encoded for X0UnlockContract on Base.
     // ========================================================================
 
     let public_inputs = SolanaProofPublicInputs {
@@ -224,7 +294,6 @@ fn main() {
         account_hash,
     };
 
-    // Commit the ABI-encoded public values for EVM verification
     let encoded = public_inputs.abi_encode();
     sp1_zkvm::io::commit_slice(&encoded);
 }

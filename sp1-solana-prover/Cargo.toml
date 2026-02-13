@@ -8,3 +8,8 @@ edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/x0-protocol/x0-01"
 authors = ["x0 Protocol Core Team <team@x0protocol.dev>"]
+
+# Pin SP1 to 3.4.0 for internally consistent dependency resolution
+[workspace.dependencies]
+sp1-sdk = "=3.4.0"
+sp1-zkvm = "=3.4.0"

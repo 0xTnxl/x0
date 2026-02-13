@@ -28,7 +28,7 @@
 sp1_zkvm::entrypoint!(main);
 
 use tiny_keccak::{Hasher, Keccak};
-use x0_sp1_common::{EVMProofPublicInputs, EVMProofWitness, EventLog};
+use x0_sp1_evm_common::{EVMProofPublicInputs, EVMProofWitness, EventLog};
 
 pub fn main() {
     // ========================================================================

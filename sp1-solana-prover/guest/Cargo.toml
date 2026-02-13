@@ -14,6 +14,8 @@ path = "src/main.rs"
 
 [dependencies]
 x0-sp1-solana-common = { path = "../common" }
-sp1-zkvm = "3.0"
+sp1-zkvm = { workspace = true }
 borsh = { version = "0.10", default-features = false }
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+sha2 = { version = "0.10", default-features = false }
+ed25519-dalek = { version = "2", default-features = false }

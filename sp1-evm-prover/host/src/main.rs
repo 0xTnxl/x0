@@ -143,7 +143,7 @@ async fn main() -> Result<()> {
                 .context("Failed to read proof file")?;
             let public_inputs_json = std::fs::read_to_string(&public_inputs)
                 .context("Failed to read public inputs file")?;
-            let public_inputs: x0_sp1_common::EVMProofPublicInputs =
+            let public_inputs: x0_sp1_evm_common::EVMProofPublicInputs =
                 serde_json::from_str(&public_inputs_json)
                     .context("Failed to deserialize public inputs")?;
 

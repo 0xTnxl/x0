@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result};
 use sp1_sdk::{ProverClient, SP1Stdin};
-use x0_sp1_common::{EVMProofPublicInputs, EVMProofWitness};
+use x0_sp1_evm_common::{EVMProofPublicInputs, EVMProofWitness};
 
 /// The ELF binary of the SP1 guest program.
 ///
@@ -13,7 +13,7 @@ use x0_sp1_common::{EVMProofPublicInputs, EVMProofWitness};
 /// To build the guest:
 ///
 /// ```bash
-/// cd sp1-prover/guest
+/// cd sp1-evm-prover/guest
 /// cargo prove build
 /// ```
 ///

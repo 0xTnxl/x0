@@ -9,4 +9,5 @@ description = "Shared types between SP1 guest and host for x0 Solana state proof
 
 [dependencies]
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+serde-big-array = { version = "0.5", default-features = false }
 borsh = { version = "0.10", default-features = false }

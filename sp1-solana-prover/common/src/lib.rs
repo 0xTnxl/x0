@@ -1,12 +1,36 @@
 //! Shared types between SP1 guest (STARK circuit) and host (prover) for
 //! Solana state proofs used in outbound bridging (Solana → Base).
 //!
+//! # Architecture
+//!
 //! The guest program proves:
-//! 1. A set of Solana validator Ed25519 signatures over a bank hash
-//!    representing ≥ 2/3 of the stake in an epoch
-//! 2. The bank hash commits to an accounts hash via Merkle path
-//! 3. A BridgeOutMessage account exists at a specific PDA with specific data
-//!    via a Merkle inclusion proof against the accounts hash
+//! 1. A BridgeOutMessage account exists in a specific slot's accounts delta
+//! 2. The accounts_delta_hash is committed to the bank hash
+//! 3. The bank hash is attested by ≥ 2/3 of epoch stake via validator votes
+//!
+//! # Solana State Model
+//!
+//! Solana's bank hash at slot S commits to state changes via:
+//!
+//! ```text
+//! bank_hash(S) = SHA-256(
+//!     parent_bank_hash(S-1)
+//!     || accounts_delta_hash(S)     ← hash of all accounts modified in slot S
+//!     || signature_count(S)
+//!     || last_blockhash(S)
+//! )
+//! ```
+//!
+//! The `accounts_delta_hash` is computed using a fanout-16 recursive Merkle
+//! tree over the account hashes of all accounts modified in slot S, matching
+//! Solana's `MERKLE_FANOUT = 16` constant.
+//!
+//! Validators vote on slot hashes by signing vote transactions which contain
+//! the bank hash. The Ed25519 signature covers the serialized transaction
+//! message, and the bank hash appears at a deterministic offset within the
+//! vote instruction data.
+//!
+//! # Public Inputs
 //!
 //! The public inputs are ABI-encoded for verification on Base EVM by
 //! the X0UnlockContract via the SP1 on-chain verifier.
@@ -18,6 +42,11 @@ extern crate alloc;
 use alloc::vec::Vec;
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
+
+/// Solana uses fanout-16 for its accounts Merkle tree computation.
+///
+/// See: `solana-accounts-db/src/accounts_hash.rs::MERKLE_FANOUT`
+pub const MERKLE_FANOUT: usize = 16;
 
 // ============================================================================
 // Public Inputs (committed by guest, verified on Base EVM)
@@ -33,7 +62,7 @@ use serde::{Deserialize, Serialize};
 ///              burnTimestamp, accountHash)
 #[derive(Clone, Debug, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct SolanaProofPublicInputs {
-    /// x0-bridge program ID on Solana (32 bytes, for program ownership validation)
+    /// x0-bridge program ID on Solana (32 bytes)
     pub bridge_program_id: [u8; 32],
 
     /// Outbound bridge nonce (from BridgeOutMessage.nonce)
@@ -59,13 +88,14 @@ impl SolanaProofPublicInputs {
     /// ABI-encode for EVM verification
     ///
     /// Matches: abi.encode(bytes32, uint64, bytes32, address, uint64, int64, bytes32)
+    /// Each value occupies exactly one 32-byte ABI slot.
     pub fn abi_encode(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(7 * 32); // Each ABI slot is 32 bytes
+        let mut buf = Vec::with_capacity(7 * 32);
 
         // bytes32: bridge_program_id
         buf.extend_from_slice(&self.bridge_program_id);
 
-        // uint64: nonce — ABI-encoded as uint256 (left-padded to 32 bytes)
+        // uint64: nonce — ABI-encoded as uint256 (left-padded)
         let mut nonce_slot = [0u8; 32];
         nonce_slot[24..32].copy_from_slice(&self.nonce.to_be_bytes());
         buf.extend_from_slice(&nonce_slot);
@@ -73,7 +103,7 @@ impl SolanaProofPublicInputs {
         // bytes32: solana_sender
         buf.extend_from_slice(&self.solana_sender);
 
-        // address: evm_recipient — ABI-encoded as address (left-padded, 12 + 20)
+        // address: evm_recipient — left-padded (12 zero bytes + 20 addr bytes)
         let mut addr_slot = [0u8; 32];
         addr_slot[12..32].copy_from_slice(&self.evm_recipient);
         buf.extend_from_slice(&addr_slot);
@@ -100,100 +130,155 @@ impl SolanaProofPublicInputs {
 }
 
 // ============================================================================
-// Private Inputs (witness — only used inside guest circuit)
+// Private Inputs (witness)
 // ============================================================================
 
 /// Private witness data for the SP1 Solana state proof
 ///
-/// Contains all the cryptographic material needed to verify a Solana
-/// account's existence and data, but is NOT revealed to the EVM verifier.
+/// # Verification Chain
+///
+/// ```text
+/// account_hash ──► accounts_delta_hash ──► bank_hash ──► validator votes
+///   (computed)   (fanout-16 Merkle proof)  (SHA-256)       (Ed25519 quorum)
+/// ```
 #[derive(Clone, Debug, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct SolanaProofWitness {
-    /// The raw account data of the BridgeOutMessage PDA
+    // -- Account data --
     pub account_data: Vec<u8>,
-
-    /// The PDA address of the BridgeOutMessage account (32 bytes)
     pub account_address: [u8; 32],
-
-    /// Owner program of the account (should be x0-bridge program ID)
     pub account_owner: [u8; 32],
-
-    /// Account lamports balance
     pub account_lamports: u64,
-
-    /// Whether the account is executable
     pub account_executable: bool,
-
-    /// Account rent epoch
     pub account_rent_epoch: u64,
 
-    /// Merkle proof: path from account leaf → accounts hash
-    /// Each element is a 32-byte sibling hash
-    pub account_proof: Vec<[u8; 32]>,
+    // -- Account inclusion proof (account → accounts_delta_hash) --
+    pub inclusion_proof: AccountInclusionProof,
+    pub accounts_delta_hash: [u8; 32],
 
-    /// Leaf index in the accounts hash Merkle tree
-    pub account_leaf_index: u64,
-
-    /// The accounts hash (root of the accounts Merkle tree)
-    pub accounts_hash: [u8; 32],
-
-    /// Bank hash that commits to the accounts hash
-    /// bank_hash = SHA-256(accounts_hash || ..._other_components)
+    // -- Bank hash --
     pub bank_hash: [u8; 32],
-
-    /// Components of the bank hash derivation (for verification)
     pub bank_hash_components: BankHashComponents,
 
-    /// Validator vote account signatures over the bank hash
-    pub validator_signatures: Vec<ValidatorSignature>,
-
-    /// Epoch stake information for quorum validation
+    // -- Validator vote attestations --
+    pub validator_votes: Vec<ValidatorVote>,
     pub epoch_stakes: Vec<ValidatorStake>,
-
-    /// Total active stake in the epoch
     pub total_epoch_stake: u64,
 
-    /// Slot number of the bank hash
+    // -- Slot info --
     pub slot: u64,
 }
 
-/// Components used to derive the bank hash
+// ============================================================================
+// Account Inclusion Proof (fanout-16 Merkle)
+// ============================================================================
+
+/// Proof of account inclusion in Solana's accounts_delta_hash
 ///
-/// bank_hash = SHA-256(
-///     accounts_hash
-///     || signature_count.to_le_bytes()
-///     || last_blockhash
-///     || parent_bank_hash
-/// )
+/// The accounts_delta_hash is a fanout-16 recursive Merkle tree over all
+/// account hashes modified in a slot. This proof provides sibling hashes
+/// at each tree level.
+///
+/// # Tree Structure (`MERKLE_FANOUT = 16`)
+///
+/// At each level, up to 16 children are concatenated and SHA-256 hashed
+/// to produce their parent:
+///
+/// ```text
+/// parent = SHA-256(child_0 || child_1 || ... || child_{n-1})
+/// ```
+///
+/// The last group at each level may have fewer than 16 children.
+///
+/// For a slot with ~3000 modified accounts: ceil(log_16(3000)) = 3 levels,
+/// proof size ≈ 3 × 15 × 32 = 1,440 bytes.
 #[derive(Clone, Debug, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct BankHashComponents {
-    /// Number of signatures in the block
-    pub signature_count: u64,
+pub struct AccountInclusionProof {
+    /// Merkle proof levels from leaf to root
+    pub levels: Vec<FanoutProofLevel>,
 
-    /// Last blockhash of the block
-    pub last_blockhash: [u8; 32],
-
-    /// Parent bank hash
-    pub parent_bank_hash: [u8; 32],
+    /// Total accounts in the delta tree
+    pub total_delta_accounts: u32,
 }
 
-/// A validator's Ed25519 signature over a bank hash
+/// One level in a fanout-16 Merkle proof
 #[derive(Clone, Debug, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct ValidatorSignature {
-    /// Validator's Ed25519 public key (32 bytes)
-    pub validator_pubkey: [u8; 32],
+pub struct FanoutProofLevel {
+    /// Sibling hashes (up to 15 for full groups, fewer for partial)
+    pub siblings: Vec<[u8; 32]>,
 
-    /// Ed25519 signature over the bank hash (64 bytes)
+    /// Position of the target within its group (0..15)
+    pub position: u8,
+}
+
+// ============================================================================
+// Bank Hash Components
+// ============================================================================
+
+/// Components of the bank hash derivation
+///
+/// ```text
+/// bank_hash = SHA-256(
+///     parent_bank_hash || accounts_delta_hash || sig_count_le || last_blockhash
+/// )
+/// ```
+///
+/// Matches `Bank::hash_internal_state()` in `solana-runtime/src/bank.rs`.
+///
+/// **Note**: On epoch boundaries, Solana mixes in an additional
+/// `epoch_accounts_hash`. The fetcher avoids epoch-boundary slots.
+#[derive(Clone, Debug, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct BankHashComponents {
+    /// Bank hash of the parent slot
+    pub parent_bank_hash: [u8; 32],
+
+    /// Number of transaction signatures in the block
+    pub signature_count: u64,
+
+    /// Last PoH blockhash of the block
+    pub last_blockhash: [u8; 32],
+}
+
+// ============================================================================
+// Validator Vote Attestation
+// ============================================================================
+
+/// A validator's vote attesting to a bank hash
+///
+/// # Circuit Verification
+///
+/// 1. `Ed25519(vote_authority, message_bytes, signature)` — authenticity
+/// 2. `message_bytes[bank_hash_offset..+32] == target_bank_hash` — content
+/// 3. `validator_identity` has `stake` in `epoch_stakes` — weight
+///
+/// The bank hash appears at a deterministic offset within the vote instruction
+/// data in the serialized transaction message. The host parses the tx to find
+/// this offset; the circuit verifies it.
+#[derive(Clone, Debug, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ValidatorVote {
+    /// Authorized voter pubkey that signed the vote transaction
+    pub vote_authority: [u8; 32],
+
+    /// Full serialized transaction message (signed by vote_authority)
+    pub message_bytes: Vec<u8>,
+
+    /// Ed25519 signature over `message_bytes`
+    #[serde(with = "serde_big_array::BigArray")]
     pub signature: [u8; 64],
 
-    /// Stake weight of this validator in the epoch
+    /// Byte offset where the target bank hash appears in `message_bytes`
+    pub bank_hash_offset: u32,
+
+    /// Validator identity (node pubkey) — for stake lookup
+    pub validator_identity: [u8; 32],
+
+    /// Activated stake (lamports)
     pub stake: u64,
 }
 
-/// Stake information for a validator in the epoch
+/// Stake information for a validator in the current epoch
 #[derive(Clone, Debug, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ValidatorStake {
-    /// Validator identity pubkey
+    /// Validator identity (node) pubkey
     pub pubkey: [u8; 32],
 
     /// Activated stake in lamports
@@ -207,42 +292,22 @@ pub struct ValidatorStake {
 /// Parsed BridgeOutMessage account data
 ///
 /// Matches the Anchor account layout from x0-bridge/src/state.rs.
-/// Used by the guest program to extract fields from raw account data.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ParsedBridgeOutMessage {
-    /// Anchor discriminator (8 bytes)
     pub discriminator: [u8; 8],
-
-    /// Account version
     pub version: u8,
-
-    /// Outbound nonce
     pub nonce: u64,
-
-    /// Solana sender address (32 bytes)
     pub solana_sender: [u8; 32],
-
-    /// EVM recipient address (20 bytes)
     pub evm_recipient: [u8; 20],
-
-    /// Amount (USDC micro-units)
     pub amount: u64,
-
-    /// Burn transaction signature (32 bytes)
     pub burn_tx_signature: [u8; 32],
-
-    /// Burn timestamp
     pub burned_at: i64,
-
-    /// Status byte (0 = Burned)
     pub status: u8,
-
-    /// PDA bump
     pub bump: u8,
 }
 
 impl ParsedBridgeOutMessage {
-    /// Expected size of the serialized account data (excluding reserved)
+    /// Minimum account data size
     pub const DATA_SIZE: usize = 8 + 1 + 8 + 32 + 20 + 8 + 32 + 8 + 1 + 1 + 32;
 
     /// Parse from raw Anchor account data

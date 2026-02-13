@@ -1,14 +1,14 @@
 [package]
-name = "x0-sp1-host"
+name = "x0-sp1-evm-host"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "SP1 host program: fetches EVM artifacts and generates STARK proofs for x0 bridge"
+description = "SP1 host program: fetches EVM (Base) artifacts and generates STARK proofs for x0 inbound bridge"
 
 [dependencies]
-x0-sp1-common = { path = "../common" }
+x0-sp1-evm-common = { path = "../common" }
 sp1-sdk = "3.0"
 tokio = { version = "1", features = ["full"] }
 alloy-provider = { version = "0.3", features = ["reqwest"] }
