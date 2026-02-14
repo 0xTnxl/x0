@@ -126,7 +126,7 @@
 \maketitle
 
 \begin{abstract}
-We present x0, a decentralized protocol for autonomous agent payments built on Solana. The protocol introduces a novel spending policy enforcement mechanism using Token-2022 transfer hooks, enabling programmable spending limits, whitelist verification, and privacy controls for AI agents. x0 implements HTTP 402 (Payment Required) for standardized payment negotiation, conditional escrow with dispute resolution, on-chain reputation scoring with temporal decay, a USDC-backed wrapper token with cryptographic reserve invariants, and on-chain zero-knowledge proof verification for confidential transfers using Groth16 proofs over the Ristretto255 curve. We further introduce FROSTGATE, a trustless bidirectional Base\,$\longleftrightarrow$\,Solana bridge that combines Hyperlane message passing with SP1 STARK proofs to enable cross-chain agent payments without trusted intermediaries. The system achieves trustless agent-to-agent transactions while preserving human oversight through a ``Blink'' mechanism for exceptional cases. We formally verify the protocol's security properties and demonstrate its efficiency through cryptographic proofs and empirical benchmarks.
+We present x0, a decentralized protocol for autonomous agent payments built on Solana. The protocol introduces a spending policy enforcement mechanism using Token-2022 transfer hooks, enabling programmable spending limits, whitelist verification, and privacy controls for AI agents. x0 implements HTTP 402 (Payment Required) for standardized payment negotiation, conditional escrow with dispute resolution, on-chain reputation scoring with temporal decay, a USDC-backed wrapper token with cryptographic reserve invariants, and on-chain zero-knowledge proof verification for confidential transfers using Groth16 proofs over the Ristretto255 curve. We further introduce FROSTGATE, a trustless bidirectional Base\,$\longleftrightarrow$\,Solana bridge that combines Hyperlane message passing with SP1 STARK proofs to enable cross-chain agent payments without trusted intermediaries. The system achieves trustless agent-to-agent transactions while preserving human oversight through a ``Blink'' mechanism for exceptional cases. We formally verify the protocol's security properties and demonstrate its efficiency through cryptographic proofs and empirical benchmarks.
 \end{abstract}
 
 \tableofcontents
@@ -136,7 +136,7 @@ We present x0, a decentralized protocol for autonomous agent payments built on S
 
 \subsection{Motivation}
 
-The proliferation of autonomous AI agents in production environments necessitates robust payment infrastructure. Traditional payment systems are ill-suited for agent-to-agent transactions due to:
+The proliferation of autonomous AI agents in production environments necessitates robust payment infrastructure. Traditional payment systems are not well suited for agent-to-agent transactions due to:
 
 \begin{enumerate}
     \item \textbf{High latency}: Credit card settlements take 2-3 days, incompatible with real-time agent interactions
@@ -176,6 +176,8 @@ We present x0, which makes the following contributions:
     
     \item \textbf{FROSTGATE Cross-Chain Bridge}: A trustless bidirectional Base\,$\longleftrightarrow$\,Solana bridge using Hyperlane message passing and SP1 STARK proofs, with event-level validation, rate limiting, and circuit breakers
 \end{enumerate}
+
+Contributions 1--7 form the core x0 protocol, operating entirely on Solana. Contribution 8 (FROSTGATE) is an optional extension enabling trustless cross-chain interactions.
 
 The x0 protocol consists of nine interoperating programs deployed on Solana, two EVM contracts on Base, two SP1 STARK proof circuits, and an off-chain WASM cryptographic library:
 
@@ -1755,6 +1757,10 @@ x0's reputation oracle addresses these limitations.
 
 \section{FROSTGATE: Trustless Cross-Chain Bridge}
 
+\begin{remark}[Design Scope]
+FROSTGATE is \emph{not} a mandatory component of the x0 protocol. The core x0 system (Sections 3--13) operates independently on Solana, providing programmable spending policies, escrow, reputation, and USDC wrapping without any cross-chain dependencies. FROSTGATE is presented as a theoretical extension for trustless interchain agentic interactions, demonstrating how x0's architecture can be extended to support Base\,$\longleftrightarrow$\,Solana payments while preserving the protocol's security guarantees. Deployments may choose to operate x0 purely on Solana, or integrate FROSTGATE to enable cross-chain agent commerce.
+\end{remark}
+
 \subsection{Problem Statement}
 
 Autonomous agent payments are inherently multi-chain.\ An agent purchasing compute on Base must pay a service provider on Solana, and vice versa.\ Existing bridge architectures---relying on multisig committees (Wormhole), optimistic fraud windows (Across), or centralized attestors (LayerZero)---introduce trust assumptions incompatible with the permissionless, real-time settlement guarantees agents require.\ A compromised bridge committee can fabricate deposits, drain reserves, and halt all cross-chain commerce.
@@ -2469,7 +2475,7 @@ x0 achieves these properties through careful cryptographic design and integratio
 
 \section*{Acknowledgments}
 
-We thank the Solana Foundation for technical support, the Anchor framework team for excellent developer tooling, and the broader Solana community for feedback during development. Special thanks to the auditors at OtterSec and Trail of Bits for security reviews.
+---
 
 \begin{thebibliography}{99}
 

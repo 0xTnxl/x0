@@ -113,8 +113,8 @@
 \contentsline {subsection}{\numberline {15.1}Problem Statement}{35}{subsection.15.1}%
 \contentsline {subsection}{\numberline {15.2}Definitions}{36}{subsection.15.2}%
 \contentsline {subsection}{\numberline {15.3}Architecture Overview}{36}{subsection.15.3}%
-\contentsline {subsection}{\numberline {15.4}On-Chain State}{36}{subsection.15.4}%
-\contentsline {subsubsection}{\numberline {15.4.1}Bridge Configuration}{36}{subsubsection.15.4.1}%
+\contentsline {subsection}{\numberline {15.4}On-Chain State}{37}{subsection.15.4}%
+\contentsline {subsubsection}{\numberline {15.4.1}Bridge Configuration}{37}{subsubsection.15.4.1}%
 \contentsline {subsubsection}{\numberline {15.4.2}Bridge Message}{37}{subsubsection.15.4.2}%
 \contentsline {subsubsection}{\numberline {15.4.3}EVM Proof Context}{37}{subsubsection.15.4.3}%
 \contentsline {subsubsection}{\numberline {15.4.4}Bridge Out Message}{38}{subsubsection.15.4.4}%
