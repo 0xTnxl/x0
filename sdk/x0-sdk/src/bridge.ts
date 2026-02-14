@@ -44,7 +44,14 @@ import {
 } from "@solana/spl-token";
 import BN from "bn.js";
 import { getInstructionDiscriminator } from "./utils";
-import { X0_BRIDGE_PROGRAM_ID, X0_WRAPPER_PROGRAM_ID } from "./constants";
+import {
+  X0_BRIDGE_PROGRAM_ID,
+  X0_WRAPPER_PROGRAM_ID,
+  LOCKED_EVENT_SIGNATURE,
+  MAX_DAILY_BRIDGE_INFLOW,
+  MAX_DAILY_BRIDGE_OUTFLOW,
+  ROLLING_WINDOW_SECONDS,
+} from "./constants";
 
 // ============================================================================
 // PDA Seeds (matching on-chain x0_common::constants)
@@ -276,11 +283,16 @@ export interface AdminActionNonceParams {
  * SP1 STARK proof public inputs — the JSON shape output by
  * `x0-sp1-host prove --public-inputs-output public_inputs.json`.
  *
- * Matches `EVMProofPublicInputs` in sp1-evm-prover/common and
- * `SP1PublicInputs` in programs/x0-bridge/src/state.rs.
+ * Matches `EVMProofPublicInputs` in `sp1-evm-prover/common/src/lib.rs` and
+ * `SP1PublicInputs` in `programs/x0-bridge/src/state.rs`.
  *
  * These are the values cryptographically committed inside the STARK
  * circuit and verified on-chain by the SP1 verifier program.
+ *
+ * IMPORTANT: The on-chain `verify_evm_proof` instruction now validates
+ * the Locked event from `event_logs` against the BridgeMessage data
+ * (amount, recipient, contract address). This prevents a compromised
+ * Hyperlane from injecting fake amounts or recipients.
  */
 export interface SP1PublicInputs {
   /** EVM block hash (32 bytes as number array) */
@@ -301,7 +313,7 @@ export interface SP1PublicInputs {
   event_logs: SP1EventLog[];
 }
 
-/** Event log entry in SP1 public inputs JSON (matches sp1-evm-prover EventLog) */
+/** Event log entry in SP1 public inputs JSON (matches sp1-evm-prover/common EventLog) */
 export interface SP1EventLog {
   /** Contract that emitted the event (20 bytes as number array) */
   contract_address: number[];
@@ -309,6 +321,182 @@ export interface SP1EventLog {
   topics: number[][];
   /** ABI-encoded non-indexed event data (byte array) */
   data: number[];
+}
+
+// ============================================================================
+// Locked Event Parsing & Validation
+// ============================================================================
+
+/**
+ * Parsed contents of a Locked event from the X0LockContract.
+ *
+ * Solidity declaration:
+ *   event Locked(address indexed sender, bytes32 indexed solanaRecipient,
+ *                uint256 amount, uint256 nonce, bytes32 messageId)
+ */
+export interface ParsedLockedEvent {
+  /** EVM address of the lock contract that emitted the event (20 bytes) */
+  contractAddress: Uint8Array;
+  /** EVM address of the USDC sender (from topics[1], 20 bytes right-aligned in 32) */
+  sender: Uint8Array;
+  /** Solana recipient pubkey bytes (from topics[2], 32 bytes) */
+  solanaRecipient: Uint8Array;
+  /** USDC amount locked (from data[0..32] as uint256 → BN) */
+  amount: BN;
+  /** Lock nonce on the EVM side (from data[32..64] as uint256 → BN) */
+  nonce: BN;
+  /** Hyperlane message ID returned by dispatch (from data[64..96], 32 bytes) */
+  messageId: Uint8Array;
+}
+
+/**
+ * Find and parse the Locked event from SP1 public inputs event logs.
+ *
+ * Searches `event_logs` for an event whose topic[0] matches
+ * `LOCKED_EVENT_SIGNATURE` and whose `contract_address` is in the
+ * `allowedContracts` set.
+ *
+ * This mirrors the on-chain validation in `verify_evm_proof` and
+ * allows SDK consumers to inspect proof contents before submitting.
+ *
+ * @param eventLogs - Event logs from SP1PublicInputs.event_logs
+ * @param allowedContracts - Whitelisted lock contract addresses (each 20 bytes)
+ * @returns The parsed Locked event, or null if not found
+ *
+ * @example
+ * ```ts
+ * const inputs = JSON.parse(fs.readFileSync("public_inputs.json", "utf-8"));
+ * const locked = findLockedEvent(inputs.event_logs, [lockContractAddr]);
+ * if (!locked) throw new Error("No Locked event in proof");
+ * console.log("Amount:", locked.amount.toString());
+ * console.log("Recipient:", new PublicKey(locked.solanaRecipient).toBase58());
+ * ```
+ */
+export function findLockedEvent(
+  eventLogs: SP1EventLog[],
+  allowedContracts: Uint8Array[]
+): ParsedLockedEvent | null {
+  const sigBytes = LOCKED_EVENT_SIGNATURE;
+
+  for (const log of eventLogs) {
+    // Need at least 3 topics (signature, sender, solanaRecipient)
+    if (log.topics.length < 3) continue;
+
+    // Check event signature
+    const topic0 = Buffer.from(log.topics[0]);
+    if (!topic0.equals(sigBytes)) continue;
+
+    // Check contract is whitelisted
+    const contractAddr = new Uint8Array(log.contract_address);
+    const isAllowed = allowedContracts.some((allowed) =>
+      Buffer.from(allowed).equals(Buffer.from(contractAddr))
+    );
+    if (!isAllowed) continue;
+
+    // Check data length (need 96 bytes: amount + nonce + messageId)
+    if (log.data.length < 96) continue;
+
+    // Parse topics
+    const senderTopic = new Uint8Array(log.topics[1]);
+    // EVM address is right-aligned in 32 bytes: extract last 20
+    const sender = senderTopic.slice(12, 32);
+    const solanaRecipient = new Uint8Array(log.topics[2]);
+
+    // Parse data (all uint256, big-endian)
+    const dataBuf = Buffer.from(log.data);
+
+    // amount: data[0..32] — uint256, extract last 8 bytes as BN
+    const amountWord = dataBuf.subarray(0, 32);
+    const amount = new BN(amountWord.subarray(24, 32), "be");
+
+    // nonce: data[32..64]
+    const nonceWord = dataBuf.subarray(32, 64);
+    const nonce = new BN(nonceWord.subarray(24, 32), "be");
+
+    // messageId: data[64..96]
+    const messageId = new Uint8Array(dataBuf.subarray(64, 96));
+
+    return {
+      contractAddress: contractAddr,
+      sender,
+      solanaRecipient,
+      amount,
+      nonce,
+      messageId,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Validate that SP1 public inputs event logs match a BridgeMessage.
+ *
+ * Performs the same validation that the on-chain `verify_evm_proof`
+ * instruction does, but in TypeScript for off-chain pre-checks.
+ * This lets SDK consumers detect mismatches before paying for an
+ * on-chain transaction that would fail.
+ *
+ * @param publicInputs - The SP1 proof public inputs
+ * @param bridgeMessage - The on-chain BridgeMessage to validate against
+ * @param allowedContracts - Whitelisted lock contract addresses
+ * @returns An object with `valid` (boolean) and `error` (string if invalid)
+ *
+ * @example
+ * ```ts
+ * const inputs = JSON.parse(fs.readFileSync("public_inputs.json", "utf-8"));
+ * const msg = await bridge.fetchMessage(messageId);
+ * const result = validateProofAgainstMessage(
+ *   inputs, msg!, config.allowedEvmContracts
+ * );
+ * if (!result.valid) throw new Error(`Pre-check failed: ${result.error}`);
+ * ```
+ */
+export function validateProofAgainstMessage(
+  publicInputs: SP1PublicInputs,
+  bridgeMessage: BridgeMessage,
+  allowedContracts: Uint8Array[]
+): { valid: boolean; error?: string } {
+  // Check tx_hash match
+  const proofTxHash = Buffer.from(publicInputs.tx_hash);
+  const messageTxHash = Buffer.from(bridgeMessage.evmTxHash);
+  if (!proofTxHash.equals(messageTxHash)) {
+    return { valid: false, error: "tx_hash mismatch between proof and bridge message" };
+  }
+
+  // Check success
+  if (!publicInputs.success) {
+    return { valid: false, error: "EVM transaction was not successful" };
+  }
+
+  // Find and validate Locked event
+  const locked = findLockedEvent(publicInputs.event_logs, allowedContracts);
+  if (!locked) {
+    return {
+      valid: false,
+      error: "No Locked event from an allowed contract found in proof event logs",
+    };
+  }
+
+  // Validate recipient
+  const eventRecipient = Buffer.from(locked.solanaRecipient);
+  const messageRecipient = bridgeMessage.recipient.toBuffer();
+  if (!eventRecipient.equals(messageRecipient)) {
+    return {
+      valid: false,
+      error: `Recipient mismatch: event=${eventRecipient.toString("hex")} message=${messageRecipient.toString("hex")}`,
+    };
+  }
+
+  // Validate amount
+  if (!locked.amount.eq(bridgeMessage.amount)) {
+    return {
+      valid: false,
+      error: `Amount mismatch: event=${locked.amount.toString()} message=${bridgeMessage.amount.toString()}`,
+    };
+  }
+
+  return { valid: true };
 }
 
 // ============================================================================
@@ -429,7 +617,7 @@ export class BridgeClient {
     return config?.isPaused ?? true;
   }
 
-  /** Get remaining daily volume capacity */
+  /** Get remaining daily inbound volume capacity */
   async remainingDailyVolume(): Promise<BN> {
     const config = await this.fetchConfig();
     if (!config) return new BN(0);
@@ -438,12 +626,11 @@ export class BridgeClient {
     const resetAt = config.dailyInflowResetTimestamp.toNumber();
 
     // If 24 hours have passed since last reset, full limit is available
-    if (now >= resetAt + 86_400) {
-      return new BN("5000000000000"); // 5M USDC (matching MAX_DAILY_BRIDGE_INFLOW)
+    if (now >= resetAt + ROLLING_WINDOW_SECONDS) {
+      return MAX_DAILY_BRIDGE_INFLOW;
     }
 
-    const dailyLimit = new BN("5000000000000"); // 5M USDC (6 decimals)
-    const remaining = dailyLimit.sub(config.dailyInflowVolume);
+    const remaining = MAX_DAILY_BRIDGE_INFLOW.sub(config.dailyInflowVolume);
     return remaining.isNeg() ? new BN(0) : remaining;
   }
 
@@ -455,12 +642,11 @@ export class BridgeClient {
     const now = Math.floor(Date.now() / 1000);
     const resetAt = config.dailyOutflowResetTimestamp.toNumber();
 
-    if (now >= resetAt + 86_400) {
-      return new BN("5000000000000"); // MAX_DAILY_BRIDGE_OUTFLOW (5M USDC)
+    if (now >= resetAt + ROLLING_WINDOW_SECONDS) {
+      return MAX_DAILY_BRIDGE_OUTFLOW;
     }
 
-    const dailyLimit = new BN("5000000000000");
-    const remaining = dailyLimit.sub(config.dailyOutflowVolume);
+    const remaining = MAX_DAILY_BRIDGE_OUTFLOW.sub(config.dailyOutflowVolume);
     return remaining.isNeg() ? new BN(0) : remaining;
   }
 

@@ -245,6 +245,95 @@ export const CT_PROOF_CONTEXT_SEED = Buffer.from("ct_proof");
 export const ADMIN_ACTION_SEED = Buffer.from("admin_action");
 
 // ============================================================================
+// Cross-Chain Bridge Constants (matching x0_common::constants)
+// ============================================================================
+
+/** Hyperlane domain ID for Base mainnet */
+export const HYPERLANE_DOMAIN_BASE = 8453;
+
+/** Hyperlane domain ID for Base Sepolia (testnet) */
+export const HYPERLANE_DOMAIN_BASE_SEPOLIA = 84532;
+
+/** Hyperlane domain ID for Solana mainnet */
+export const HYPERLANE_DOMAIN_SOLANA = 1399811149;
+
+/** Hyperlane domain ID for Solana devnet */
+export const HYPERLANE_DOMAIN_SOLANA_DEVNET = 1399811150;
+
+/** EVM address size in bytes */
+export const EVM_ADDRESS_SIZE = 20;
+
+/** EVM hash size in bytes (keccak256) */
+export const EVM_HASH_SIZE = 32;
+
+/** Maximum bridge transfer amount per transaction (100,000 USDC with 6 decimals) */
+export const MAX_BRIDGE_AMOUNT_PER_TX = new BN("100000000000");
+
+/** Minimum bridge transfer amount (10 USDC with 6 decimals) */
+export const MIN_BRIDGE_AMOUNT = new BN("10000000");
+
+/** Maximum daily bridge inflow (5,000,000 USDC with 6 decimals) */
+export const MAX_DAILY_BRIDGE_INFLOW = new BN("5000000000000");
+
+/** Maximum daily bridge outflow (5,000,000 USDC with 6 decimals) */
+export const MAX_DAILY_BRIDGE_OUTFLOW = new BN("5000000000000");
+
+/** STARK proof validity window in seconds (10 minutes) */
+export const BRIDGE_PROOF_VALIDITY_SECONDS = 600;
+
+/** Maximum number of allowed EVM lock contracts */
+export const MAX_ALLOWED_EVM_CONTRACTS = 10;
+
+/** Maximum number of supported Hyperlane domains */
+export const MAX_SUPPORTED_DOMAINS = 10;
+
+/** Maximum number of event logs in a proof context */
+export const MAX_EVENT_LOGS = 10;
+
+/** Maximum event data size in bytes */
+export const MAX_EVENT_DATA_SIZE = 256;
+
+/** Maximum number of event topics */
+export const MAX_EVENT_TOPICS = 4;
+
+/** Bridge admin timelock duration in seconds (48 hours) */
+export const BRIDGE_ADMIN_TIMELOCK_SECONDS = 172_800;
+
+/** Circuit breaker threshold (100M USDC with 6 decimals) */
+export const BRIDGE_CIRCUIT_BREAKER_THRESHOLD = new BN("100000000000000");
+
+/**
+ * keccak256("Locked(address,bytes32,uint256,uint256,bytes32)")
+ *
+ * Event signature for the X0LockContract.Locked event on Base.
+ * Used to locate and validate the deposit event in ZK-proven receipt logs.
+ *
+ * Solidity declaration:
+ *   event Locked(address indexed sender, bytes32 indexed solanaRecipient,
+ *               uint256 amount, uint256 nonce, bytes32 messageId)
+ *
+ * Topics:  [0] = this hash, [1] = sender, [2] = solanaRecipient
+ * Data:    abi.encode(amount, nonce, messageId)
+ */
+export const LOCKED_EVENT_SIGNATURE = Buffer.from([
+  0x6e, 0xa4, 0xb3, 0xe5, 0xd5, 0xca, 0x80, 0xe1,
+  0xec, 0x33, 0xaf, 0x6e, 0x82, 0x4b, 0x1d, 0x7f,
+  0x59, 0x5b, 0x0b, 0x2f, 0x6d, 0x9d, 0x72, 0x42,
+  0x22, 0xfc, 0xab, 0xd1, 0x8c, 0x36, 0xba, 0x15,
+]);
+
+/**
+ * keccak256("Transfer(address,address,uint256)")
+ * Standard ERC-20 Transfer event signature.
+ */
+export const TRANSFER_EVENT_SIGNATURE = Buffer.from([
+  0xdd, 0xf2, 0x52, 0xad, 0x1b, 0xe2, 0xc8, 0x9b,
+  0x69, 0xc2, 0xb0, 0x68, 0xfc, 0x37, 0x8d, 0xaa,
+  0x95, 0x2b, 0xa7, 0xf1, 0x63, 0xc4, 0xa1, 0x16,
+  0x28, 0xf5, 0x5a, 0x4d, 0xf5, 0x23, 0xb3, 0xef,
+]);
+
+// ============================================================================
 // ZK Verifier Program
 // ============================================================================
 
