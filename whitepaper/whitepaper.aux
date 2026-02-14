@@ -16,158 +16,218 @@
 \gdef\HyperFirstAtBeginDocument#1{#1}
 \providecommand\HyField@AuxAddToFields[1]{}
 \providecommand\HyField@AuxAddToCoFields[2]{}
-\@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{5}{section.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {1.1}Motivation}{5}{subsection.1.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {1.2}Contributions}{5}{subsection.1.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.2.1}Architecture Diagram}{6}{subsubsection.1.2.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {2}Preliminaries}{7}{section.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Cryptographic Primitives}{7}{subsection.2.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Solana Architecture}{7}{subsection.2.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.2.1}Account Model}{7}{subsubsection.2.2.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.2.2}Program Derived Addresses (PDAs)}{8}{subsubsection.2.2.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.2.3}Token-2022 Extensions}{8}{subsubsection.2.2.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Bloom Filters}{8}{subsection.2.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}Merkle Trees}{8}{subsection.2.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {3}Policy Enforcement Layer (x0-guard)}{9}{section.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Problem Statement}{9}{subsection.3.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Design Goals}{9}{subsection.3.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Architecture}{9}{subsection.3.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.3.1}AgentPolicy Account}{9}{subsubsection.3.3.1}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {1}AgentPolicy Account Structure}{9}{lstlisting.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.3.2}Transfer Hook Mechanism}{10}{subsubsection.3.3.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Rolling Window Algorithm}{10}{subsection.3.4}\protected@file@percent }
-\@writefile{loa}{\contentsline {algorithm}{\numberline {1}{\ignorespaces Rolling Window Spend Limit Enforcement}}{10}{algorithm.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.5}Whitelist Verification}{11}{subsection.3.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.1}Merkle Mode}{11}{subsubsection.3.5.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.2}Bloom Mode}{11}{subsubsection.3.5.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.3}Domain Mode}{11}{subsubsection.3.5.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.6}Privacy Levels}{11}{subsection.3.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.1}Public Mode}{11}{subsubsection.3.6.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.2}Confidential Mode}{11}{subsubsection.3.6.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.7}Reentrancy Protection}{12}{subsection.3.7}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {2}Reentrancy Protection Pattern}{12}{lstlisting.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {4}HTTP 402 Protocol}{12}{section.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Problem Statement}{12}{subsection.4.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Protocol Flow}{13}{subsection.4.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Protocol Design}{13}{subsection.4.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.3.1}Payment Request}{13}{subsubsection.4.3.1}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {3}HTTP 402 Payment Required Response}{13}{lstlisting.3}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {4}Payment Request Structure}{13}{lstlisting.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.3.2}Payment Proof}{14}{subsubsection.4.3.2}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {5}HTTP Request with Payment Proof}{14}{lstlisting.5}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {6}Payment Proof Structure}{14}{lstlisting.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.3.3}Verification}{14}{subsubsection.4.3.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Security Properties}{14}{subsection.4.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {5}Conditional Escrow (x0-escrow)}{14}{section.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Design}{14}{subsection.5.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.1.1}Escrow State Machine}{15}{subsubsection.5.1.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.1.2}Escrow Account}{15}{subsubsection.5.1.2}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {7}Escrow Account Structure}{15}{lstlisting.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Key Operations}{15}{subsection.5.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.2.1}Create and Fund}{15}{subsubsection.5.2.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.2.2}Delivery and Release}{15}{subsubsection.5.2.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.2.3}Auto-Release}{15}{subsubsection.5.2.3}\protected@file@percent }
-\@writefile{loa}{\contentsline {algorithm}{\numberline {2}{\ignorespaces Create and Fund Escrow}}{16}{algorithm.2}\protected@file@percent }
-\@writefile{loa}{\contentsline {algorithm}{\numberline {3}{\ignorespaces Mark Delivered and Release Funds}}{16}{algorithm.3}\protected@file@percent }
-\@writefile{loa}{\contentsline {algorithm}{\numberline {4}{\ignorespaces Auto-Release After Timeout}}{16}{algorithm.4}\protected@file@percent }
-\@writefile{loa}{\contentsline {algorithm}{\numberline {5}{\ignorespaces Initiate and Resolve Dispute}}{17}{algorithm.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.2.4}Dispute Resolution}{17}{subsubsection.5.2.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Security Analysis}{17}{subsection.5.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {6}Reputation Oracle (x0-reputation)}{18}{section.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Design Goals}{18}{subsection.6.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Reputation Account}{18}{subsection.6.2}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {8}Reputation Account Structure}{18}{lstlisting.8}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Reputation Score Calculation}{18}{subsection.6.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Temporal Decay}{19}{subsection.6.4}\protected@file@percent }
-\@writefile{loa}{\contentsline {algorithm}{\numberline {6}{\ignorespaces Apply Reputation Decay}}{20}{algorithm.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}Authorization Model}{20}{subsection.6.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {7}Agent Discovery (x0-registry)}{20}{section.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Registry Entry}{20}{subsection.7.1}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {9}Registry Entry Structure}{20}{lstlisting.9}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Discovery Algorithm}{21}{subsection.7.2}\protected@file@percent }
-\@writefile{loa}{\contentsline {algorithm}{\numberline {7}{\ignorespaces Find Agents by Capability}}{21}{algorithm.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Capability Metadata}{21}{subsection.7.3}\protected@file@percent }
-\newlabel{sec:capability-metadata}{{7.3}{21}{Capability Metadata}{subsection.7.3}{}}
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {10}Capability Metadata Example}{21}{lstlisting.10}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {8}USDC Wrapper (x0-wrapper)}{21}{section.8}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.1}Problem Statement}{21}{subsection.8.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.2}Design}{22}{subsection.8.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.2.1}State Accounts}{22}{subsubsection.8.2.1}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {11}Wrapper Configuration Account}{22}{lstlisting.11}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {12}Wrapper Statistics Account}{22}{lstlisting.12}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.2.2}Reserve Invariant}{22}{subsubsection.8.2.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.3}Governance}{23}{subsection.8.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.3.1}Timelock}{23}{subsubsection.8.3.1}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {13}Timelocked Admin Action}{23}{lstlisting.13}\protected@file@percent }
-\@writefile{loa}{\contentsline {algorithm}{\numberline {8}{\ignorespaces Timelock Pattern}}{23}{algorithm.8}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.3.2}Emergency Pause}{24}{subsubsection.8.3.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.4}Reserve Ratio Monitoring}{24}{subsection.8.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {9}Human-in-the-Loop (Blinks)}{24}{section.9}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {9.1}Problem Statement}{24}{subsection.9.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {9.2}Blink Design}{24}{subsection.9.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.2.1}Generation}{24}{subsubsection.9.2.1}\protected@file@percent }
-\@writefile{loa}{\contentsline {algorithm}{\numberline {9}{\ignorespaces Blink Rate Limit Check}}{25}{algorithm.9}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.2.2}Rate Limiting}{25}{subsubsection.9.2.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.2.3}Approval}{25}{subsubsection.9.2.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {10}Economic Model}{25}{section.10}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {10.1}Fee Structure}{25}{subsection.10.1}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Protocol Fee Schedule}}{25}{table.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {10.2}Fee Collection}{25}{subsection.10.2}\protected@file@percent }
-\@writefile{loa}{\contentsline {algorithm}{\numberline {10}{\ignorespaces Fee Harvesting}}{26}{algorithm.10}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {10.3}Token Economics}{26}{subsection.10.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {10.3.1}x0-USD Supply Dynamics}{26}{subsubsection.10.3.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {11}Zero-Knowledge Proof Verification (x0-zk-verifier)}{26}{section.11}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {11.1}Problem Statement}{26}{subsection.11.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{6}{section.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.1}Motivation}{6}{subsection.1.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.2}Contributions}{6}{subsection.1.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.2.1}Architecture Overview}{8}{subsubsection.1.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}Preliminaries}{8}{section.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Cryptographic Primitives}{8}{subsection.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Solana Architecture}{9}{subsection.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.2.1}Account Model}{9}{subsubsection.2.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.2.2}Program Derived Addresses (PDAs)}{9}{subsubsection.2.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.2.3}Token-2022 Extensions}{9}{subsubsection.2.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Bloom Filters}{9}{subsection.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}Merkle Trees}{10}{subsection.2.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}Policy Enforcement Layer (x0-guard)}{10}{section.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Problem Statement}{10}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Design Goals}{10}{subsection.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Architecture}{10}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.3.1}AgentPolicy Account}{10}{subsubsection.3.3.1}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {1}AgentPolicy Account Structure}{10}{lstlisting.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.3.2}Transfer Hook Mechanism}{11}{subsubsection.3.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Rolling Window Algorithm}{11}{subsection.3.4}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {1}{\ignorespaces Rolling Window Spend Limit Enforcement}}{12}{algorithm.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.5}Whitelist Verification}{12}{subsection.3.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.1}Merkle Mode}{12}{subsubsection.3.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.2}Bloom Mode}{12}{subsubsection.3.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.3}Domain Mode}{12}{subsubsection.3.5.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.6}Privacy Levels}{13}{subsection.3.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.1}Public Mode}{13}{subsubsection.3.6.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.2}Confidential Mode}{13}{subsubsection.3.6.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.7}Reentrancy Protection}{13}{subsection.3.7}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {2}Reentrancy Protection Pattern}{13}{lstlisting.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}HTTP 402 Protocol}{14}{section.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Problem Statement}{14}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Protocol Flow}{14}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Protocol Design}{14}{subsection.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.3.1}Payment Request}{14}{subsubsection.4.3.1}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {3}HTTP 402 Payment Required Response}{14}{lstlisting.3}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {4}Payment Request Structure}{14}{lstlisting.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.3.2}Payment Proof}{15}{subsubsection.4.3.2}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {5}HTTP Request with Payment Proof}{15}{lstlisting.5}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {6}Payment Proof Structure}{15}{lstlisting.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.3.3}Verification}{15}{subsubsection.4.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Security Properties}{16}{subsection.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}Conditional Escrow (x0-escrow)}{16}{section.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Design}{16}{subsection.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.1.1}Escrow State Machine}{16}{subsubsection.5.1.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.1.2}Escrow Account}{16}{subsubsection.5.1.2}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {7}Escrow Account Structure}{16}{lstlisting.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Key Operations}{17}{subsection.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.2.1}Create and Fund}{17}{subsubsection.5.2.1}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {2}{\ignorespaces Create and Fund Escrow}}{17}{algorithm.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.2.2}Delivery and Release}{17}{subsubsection.5.2.2}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {3}{\ignorespaces Mark Delivered and Release Funds}}{17}{algorithm.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.2.3}Auto-Release}{17}{subsubsection.5.2.3}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {4}{\ignorespaces Auto-Release After Timeout}}{18}{algorithm.4}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {5}{\ignorespaces Initiate and Resolve Dispute}}{18}{algorithm.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.2.4}Dispute Resolution}{19}{subsubsection.5.2.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Security Analysis}{19}{subsection.5.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}Reputation Oracle (x0-reputation)}{19}{section.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Design Goals}{19}{subsection.6.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Reputation Account}{19}{subsection.6.2}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {8}Reputation Account Structure}{19}{lstlisting.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Reputation Score Calculation}{20}{subsection.6.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Temporal Decay}{21}{subsection.6.4}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {6}{\ignorespaces Apply Reputation Decay}}{21}{algorithm.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}Authorization Model}{21}{subsection.6.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}Agent Discovery (x0-registry)}{21}{section.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Registry Entry}{21}{subsection.7.1}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {9}Registry Entry Structure}{22}{lstlisting.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Discovery Algorithm}{22}{subsection.7.2}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {7}{\ignorespaces Find Agents by Capability}}{22}{algorithm.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Capability Metadata}{22}{subsection.7.3}\protected@file@percent }
+\newlabel{sec:capability-metadata}{{7.3}{22}{Capability Metadata}{subsection.7.3}{}}
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {10}Capability Metadata Example}{22}{lstlisting.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {8}USDC Wrapper (x0-wrapper)}{23}{section.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.1}Problem Statement}{23}{subsection.8.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.2}Design}{23}{subsection.8.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.2.1}State Accounts}{23}{subsubsection.8.2.1}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {11}Wrapper Configuration Account}{23}{lstlisting.11}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {12}Wrapper Statistics Account}{23}{lstlisting.12}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.2.2}Reserve Invariant}{24}{subsubsection.8.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.3}Governance}{24}{subsection.8.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.3.1}Timelock}{24}{subsubsection.8.3.1}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {13}Timelocked Admin Action}{24}{lstlisting.13}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {8}{\ignorespaces Timelock Pattern}}{25}{algorithm.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.3.2}Emergency Pause}{25}{subsubsection.8.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.4}Reserve Ratio Monitoring}{25}{subsection.8.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {9}Human-in-the-Loop (Blinks)}{25}{section.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.1}Problem Statement}{25}{subsection.9.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.2}Blink Design}{25}{subsection.9.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.2.1}Generation}{26}{subsubsection.9.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.2.2}Rate Limiting}{26}{subsubsection.9.2.2}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {9}{\ignorespaces Blink Rate Limit Check}}{26}{algorithm.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.2.3}Approval}{26}{subsubsection.9.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {10}Economic Model}{26}{section.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.1}Fee Structure}{26}{subsection.10.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.2}Fee Collection}{26}{subsection.10.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Protocol Fee Schedule}}{27}{table.1}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {10}{\ignorespaces Fee Harvesting}}{27}{algorithm.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.3}Token Economics}{27}{subsection.10.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {10.3.1}x0-USD Supply Dynamics}{27}{subsubsection.10.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {11}Zero-Knowledge Proof Verification (x0-zk-verifier)}{27}{section.11}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.1}Problem Statement}{27}{subsection.11.1}\protected@file@percent }
 \citation{groth16}
-\@writefile{toc}{\contentsline {subsection}{\numberline {11.2}Cryptographic Foundations}{27}{subsection.11.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {11.2.1}Twisted ElGamal Encryption}{27}{subsubsection.11.2.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {11.2.2}Groth16 Proof System}{27}{subsubsection.11.2.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {11.3}Proof Types}{27}{subsection.11.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {11.3.1}PubkeyValidityProof}{27}{subsubsection.11.3.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {11.3.2}ZeroBalanceProof}{28}{subsubsection.11.3.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {11.3.3}WithdrawProof}{28}{subsubsection.11.3.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {11.3.4}TransferProof}{28}{subsubsection.11.3.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {11.4}Architecture}{28}{subsection.11.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {11.4.1}Proof Context Account}{28}{subsubsection.11.4.1}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {14}Proof Context State Account}{28}{lstlisting.14}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {11.4.2}Proof Freshness}{29}{subsubsection.11.4.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {11.4.3}Amount Bounds}{29}{subsubsection.11.4.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {11.5}Off-Chain Proof Generation (x0-zk-proofs)}{29}{subsection.11.5}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {15}x0-zk-proofs WASM Interface}{29}{lstlisting.15}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {11.6}Verification Flow}{30}{subsection.11.6}\protected@file@percent }
-\@writefile{loa}{\contentsline {algorithm}{\numberline {11}{\ignorespaces Confidential Withdrawal with ZK Proof}}{30}{algorithm.11}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {11.7}Security Properties}{30}{subsection.11.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {12}Security Analysis}{30}{section.12}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {12.1}Threat Model}{30}{subsection.12.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {12.2}Attack Scenarios and Mitigations}{31}{subsection.12.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {12.2.1}Compromised Agent Key}{31}{subsubsection.12.2.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {12.2.2}Sybil Attack on Reputation}{31}{subsubsection.12.2.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {12.2.3}Escrow Griefing}{31}{subsubsection.12.2.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {12.2.4}Wrapper Reserve Drain}{31}{subsubsection.12.2.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {12.2.5}Transfer Hook Configuration Attack}{32}{subsubsection.12.2.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {12.3}Formal Verification}{32}{subsection.12.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {12.3.1}Spend Limit Invariant}{32}{subsubsection.12.3.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {12.3.2}Reserve Invariant}{32}{subsubsection.12.3.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {13}Performance Analysis}{32}{section.13}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {13.1}Computational Complexity}{32}{subsection.13.1}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Computational Complexity ($n$ = window size, $m$ = whitelist size, $k$ = hash count, $N$ = registered agents)}}{32}{table.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.2}Cryptographic Foundations}{28}{subsection.11.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {11.2.1}Twisted ElGamal Encryption}{28}{subsubsection.11.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {11.2.2}Groth16 Proof System}{28}{subsubsection.11.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.3}Proof Types}{28}{subsection.11.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {11.3.1}PubkeyValidityProof}{29}{subsubsection.11.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {11.3.2}ZeroBalanceProof}{29}{subsubsection.11.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {11.3.3}WithdrawProof}{29}{subsubsection.11.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {11.3.4}TransferProof}{29}{subsubsection.11.3.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.4}Architecture}{29}{subsection.11.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {11.4.1}Proof Context Account}{29}{subsubsection.11.4.1}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {14}Proof Context State Account}{29}{lstlisting.14}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {11.4.2}Proof Freshness}{30}{subsubsection.11.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {11.4.3}Amount Bounds}{30}{subsubsection.11.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.5}Off-Chain Proof Generation (x0-zk-proofs)}{30}{subsection.11.5}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {15}x0-zk-proofs WASM Interface}{30}{lstlisting.15}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.6}Verification Flow}{31}{subsection.11.6}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {11}{\ignorespaces Confidential Withdrawal with ZK Proof}}{31}{algorithm.11}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.7}Security Properties}{31}{subsection.11.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {12}Security Analysis}{31}{section.12}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {12.1}Threat Model}{31}{subsection.12.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {12.2}Attack Scenarios and Mitigations}{32}{subsection.12.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {12.2.1}Compromised Agent Key}{32}{subsubsection.12.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {12.2.2}Sybil Attack on Reputation}{32}{subsubsection.12.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {12.2.3}Escrow Griefing}{32}{subsubsection.12.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {12.2.4}Wrapper Reserve Drain}{32}{subsubsection.12.2.4}\protected@file@percent }
 \citation{lightning}
 \citation{raiden}
-\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Account Sizes and Rent Costs (at 0.00000348 SOL/byte-epoch)}}{33}{table.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {12.2.5}Transfer Hook Configuration Attack}{33}{subsubsection.12.2.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {12.3}Formal Verification}{33}{subsection.12.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {12.3.1}Spend Limit Invariant}{33}{subsubsection.12.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {12.3.2}Reserve Invariant}{33}{subsubsection.12.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {13}Performance Analysis}{33}{section.13}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {13.1}Computational Complexity}{33}{subsection.13.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {13.2}On-Chain Costs}{33}{subsection.13.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {13.3}Transaction Benchmarks}{33}{subsection.13.3}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Transaction Performance (1 CU $\approx $ 10 µs)}}{33}{table.4}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {14}Related Work}{33}{section.14}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {14.1}Payment Channels}{33}{subsection.14.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {14.2}Escrow Protocols}{33}{subsection.14.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {14.3}Reputation Systems}{34}{subsection.14.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {15}Future Work}{34}{section.15}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {15.1}Extended Zero-Knowledge Applications}{34}{subsection.15.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {15.2}Cross-Chain Support}{34}{subsection.15.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {15.3}Machine Learning Integration}{34}{subsection.15.3}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Computational Complexity ($n$ = window size, $m$ = whitelist size, $k$ = hash count, $N$ = registered agents, $E$ = event count, $T$ = topics per event, $|\pi |$ = proof size)}}{34}{table.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Account Sizes and Rent Costs (at 0.00000348 SOL/byte-epoch)}}{34}{table.3}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Transaction Performance (1 CU $\approx $ 10 µs)}}{34}{table.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {14.2}Escrow Protocols}{35}{subsection.14.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {14.3}Reputation Systems}{35}{subsection.14.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {15}FROSTGATE: Trustless Cross-Chain Bridge}{35}{section.15}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {15.1}Problem Statement}{35}{subsection.15.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {15.2}Definitions}{36}{subsection.15.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {15.3}Architecture Overview}{36}{subsection.15.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {15.4}On-Chain State}{36}{subsection.15.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {15.4.1}Bridge Configuration}{36}{subsubsection.15.4.1}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {16}BridgeConfig State Account}{37}{lstlisting.16}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {15.4.2}Bridge Message}{37}{subsubsection.15.4.2}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {17}BridgeMessage State Account}{37}{lstlisting.17}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {15.4.3}EVM Proof Context}{37}{subsubsection.15.4.3}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {18}EVMProofContext State Account}{37}{lstlisting.18}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {15.4.4}Bridge Out Message}{38}{subsubsection.15.4.4}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {19}BridgeOutMessage State Account}{38}{lstlisting.19}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {15.5}Inbound Protocol (Base $\to $ Solana)}{38}{subsection.15.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {15.5.1}Step 1: USDC Lock on Base}{38}{subsubsection.15.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {15.5.2}Step 2: Hyperlane Message Delivery}{39}{subsubsection.15.5.2}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {12}{\ignorespaces Inbound Message Reception (\texttt  {handle\_message})}}{39}{algorithm.12}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {15.5.3}Step 3: STARK Proof Verification}{39}{subsubsection.15.5.3}\protected@file@percent }
+\newlabel{thm:event-validation}{{15.1}{40}{Event Validation Soundness}{theorem.15.1}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {15.5.4}Step 4: Mint Execution}{40}{subsubsection.15.5.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {15.6}Outbound Protocol (Solana $\to $ Base)}{40}{subsection.15.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {15.6.1}Step 1: Burn on Solana}{40}{subsubsection.15.6.1}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {13}{\ignorespaces Mint Execution (\texttt  {execute\_mint})}}{41}{algorithm.13}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {14}{\ignorespaces Outbound Bridge Initiation (\texttt  {initiate\_bridge\_out})}}{41}{algorithm.14}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {15.6.2}Step 2: Proof Generation and Unlock on Base}{42}{subsubsection.15.6.2}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {15}{\ignorespaces Outbound Unlock (\texttt  {X0UnlockContract.unlock})}}{42}{algorithm.15}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {15.7}SP1 STARK Proof Circuits}{42}{subsection.15.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {15.7.1}EVM Proof Circuit (Base $\to $ Solana)}{42}{subsubsection.15.7.1}\protected@file@percent }
+\newlabel{def:evm-proof}{{15.6}{42}{EVM Transaction Inclusion Proof}{definition.15.6}{}}
+\newlabel{eq:block-hash}{{44}{42}{EVM Transaction Inclusion Proof}{equation.15.44}{}}
+\newlabel{eq:tx-root}{{45}{42}{EVM Transaction Inclusion Proof}{equation.15.45}{}}
+\newlabel{eq:rcpt-root}{{46}{42}{EVM Transaction Inclusion Proof}{equation.15.46}{}}
+\newlabel{eq:tx-mpt}{{47}{42}{EVM Transaction Inclusion Proof}{equation.15.47}{}}
+\newlabel{eq:rcpt-mpt}{{48}{42}{EVM Transaction Inclusion Proof}{equation.15.48}{}}
+\newlabel{eq:status}{{49}{42}{EVM Transaction Inclusion Proof}{equation.15.49}{}}
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {20}EVM Proof Public Inputs (sp1-evm-prover)}{42}{lstlisting.20}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {15.7.2}Solana Proof Circuit (Solana $\to $ Base)}{43}{subsubsection.15.7.2}\protected@file@percent }
+\newlabel{def:sol-proof}{{15.7}{43}{Solana Account Inclusion Proof}{definition.15.7}{}}
+\newlabel{eq:parse}{{50}{43}{Solana Account Inclusion Proof}{equation.15.50}{}}
+\newlabel{eq:burned-status}{{51}{43}{Solana Account Inclusion Proof}{equation.15.51}{}}
+\newlabel{eq:owner}{{52}{43}{Solana Account Inclusion Proof}{equation.15.52}{}}
+\newlabel{eq:acct-hash}{{53}{43}{Solana Account Inclusion Proof}{equation.15.53}{}}
+\newlabel{eq:merkle16}{{54}{43}{Solana Account Inclusion Proof}{equation.15.54}{}}
+\newlabel{eq:bank-hash}{{55}{43}{Solana Account Inclusion Proof}{equation.15.55}{}}
+\newlabel{eq:quorum}{{56}{43}{Solana Account Inclusion Proof}{equation.15.56}{}}
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {21}Solana Proof Public Inputs (sp1-solana-prover)}{43}{lstlisting.21}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {15.8}Rate Limiting and Circuit Breakers}{44}{subsection.15.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {15.8.1}Per-Transaction Bounds}{44}{subsubsection.15.8.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {15.8.2}Daily Rolling Window}{44}{subsubsection.15.8.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {15.8.3}Circuit Breakers}{44}{subsubsection.15.8.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {15.9}Proof Freshness}{45}{subsection.15.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {15.10}EVM Contracts}{45}{subsection.15.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {15.10.1}X0LockContract}{45}{subsubsection.15.10.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {15.10.2}X0UnlockContract}{45}{subsubsection.15.10.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {15.11}Administrative Controls}{46}{subsection.15.11}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {15.12}Security Analysis}{46}{subsection.15.12}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {15.12.1}Threat Model}{46}{subsubsection.15.12.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {15.12.2}Mitigations}{46}{subsubsection.15.12.2}\protected@file@percent }
+\newlabel{thm:frostgate-soundness}{{15.3}{46}{FROSTGATE Soundness}{theorem.15.3}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces FROSTGATE Attack Vectors and Mitigations}}{47}{table.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {16}Future Work}{48}{section.16}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {16.1}Extended Zero-Knowledge Applications}{48}{subsection.16.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {16.2}Cross-Chain Extension}{48}{subsection.16.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {16.3}Machine Learning Integration}{49}{subsection.16.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {16.4}Governance}{49}{subsection.16.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {17}Conclusion}{49}{section.17}\protected@file@percent }
 \bibcite{bitcoin}{1}
-\@writefile{toc}{\contentsline {subsection}{\numberline {15.4}Governance}{35}{subsection.15.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {16}Conclusion}{35}{section.16}\protected@file@percent }
 \bibcite{ethereum}{2}
 \bibcite{solana}{3}
 \bibcite{lightning}{4}
@@ -179,20 +239,28 @@
 \bibcite{ed25519}{10}
 \bibcite{groth16}{11}
 \bibcite{ristretto}{12}
-\@writefile{toc}{\contentsline {section}{\numberline {A}Error Codes Reference}{36}{appendix.A}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {B}Program Addresses}{36}{appendix.B}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {C}Mathematical Notation}{36}{appendix.C}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {D}SDK Integration Guide}{36}{appendix.D}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {D.1}Installation}{36}{subsection.D.1}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Protocol Error Codes (representative subset; 7 enums, 60+ total codes). Full reference in source: \texttt  {x0-common/src/error.rs}}}{37}{table.5}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces Deployed Program Addresses}}{38}{table.6}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces Mathematical Notation Reference}}{38}{table.7}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {16}SDK Installation}{38}{lstlisting.16}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {D.2}Quick Start}{38}{subsection.D.2}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {17}Basic SDK Usage}{38}{lstlisting.17}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {D.3}SDK Modules}{39}{subsection.D.3}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces SDK Module Overview}}{39}{table.8}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {D.4}Resources}{39}{subsection.D.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {D.5}Confidential Transfer Architecture}{40}{subsection.D.5}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {18}Confidential Transfer ZK Proof Generation}{40}{lstlisting.18}\protected@file@percent }
-\gdef \@abspage@last{40}
+\bibcite{sp1}{13}
+\bibcite{hyperlane}{14}
+\bibcite{stark}{15}
+\bibcite{mpt}{16}
+\gdef \LT@i {\LT@entry 
+    {4}{35.8532pt}\LT@entry 
+    {4}{137.54771pt}\LT@entry 
+    {4}{165.33282pt}}
+\@writefile{toc}{\contentsline {section}{\numberline {A}Error Codes Reference}{51}{appendix.A}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {6}{Protocol Error Codes (representative subset; 8 enums, 90+ total codes). Full reference in source: \texttt  {x0-common/src/error.rs}}}{52}{table.6}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces Deployed Program Addresses}}{53}{table.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {B}Program Addresses}{53}{appendix.B}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {C}Mathematical Notation}{53}{appendix.C}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces Mathematical Notation Reference}}{53}{table.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {D}SDK Integration Guide}{53}{appendix.D}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.1}Installation}{53}{subsection.D.1}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {22}SDK Installation}{54}{lstlisting.22}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.2}Quick Start}{54}{subsection.D.2}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {23}Basic SDK Usage}{54}{lstlisting.23}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.3}SDK Modules}{54}{subsection.D.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.4}Resources}{54}{subsection.D.4}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {9}{\ignorespaces SDK Module Overview}}{55}{table.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.5}Confidential Transfer Architecture}{55}{subsection.D.5}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {24}Confidential Transfer ZK Proof Generation}{55}{lstlisting.24}\protected@file@percent }
+\gdef \@abspage@last{55}

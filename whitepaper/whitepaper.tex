@@ -17,6 +17,7 @@
 \usepackage{algpseudocode}
 \usepackage{tikz}
 \usetikzlibrary{shapes,arrows,positioning}
+\usepackage{longtable}
 
 % Define colors for code listings
 \definecolor{codegreen}{rgb}{0,0.6,0}
@@ -125,7 +126,7 @@
 \maketitle
 
 \begin{abstract}
-We present x0, a decentralized protocol for autonomous agent payments built on Solana. The protocol introduces a novel spending policy enforcement mechanism using Token-2022 transfer hooks, enabling programmable spending limits, whitelist verification, and privacy controls for AI agents. x0 implements HTTP 402 (Payment Required) for standardized payment negotiation, conditional escrow with dispute resolution, on-chain reputation scoring with temporal decay, a USDC-backed wrapper token with cryptographic reserve invariants, and on-chain zero-knowledge proof verification for confidential transfers using Groth16 proofs over the Ristretto255 curve. The system achieves trustless agent-to-agent transactions while preserving human oversight through a ``Blink'' mechanism for exceptional cases. We formally verify the protocol's security properties and demonstrate its efficiency through cryptographic proofs and empirical benchmarks.
+We present x0, a decentralized protocol for autonomous agent payments built on Solana. The protocol introduces a novel spending policy enforcement mechanism using Token-2022 transfer hooks, enabling programmable spending limits, whitelist verification, and privacy controls for AI agents. x0 implements HTTP 402 (Payment Required) for standardized payment negotiation, conditional escrow with dispute resolution, on-chain reputation scoring with temporal decay, a USDC-backed wrapper token with cryptographic reserve invariants, and on-chain zero-knowledge proof verification for confidential transfers using Groth16 proofs over the Ristretto255 curve. We further introduce FROSTGATE, a trustless bidirectional Base\,$\longleftrightarrow$\,Solana bridge that combines Hyperlane message passing with SP1 STARK proofs to enable cross-chain agent payments without trusted intermediaries. The system achieves trustless agent-to-agent transactions while preserving human oversight through a ``Blink'' mechanism for exceptional cases. We formally verify the protocol's security properties and demonstrate its efficiency through cryptographic proofs and empirical benchmarks.
 \end{abstract}
 
 \tableofcontents
@@ -172,9 +173,11 @@ We present x0, which makes the following contributions:
     \item \textbf{Human-in-the-Loop (Blinks)}: A fallback mechanism for exceptional transactions requiring human approval
     
     \item \textbf{Zero-Knowledge Verification}: On-chain Groth16 proof verification for confidential transfers, with client-side proof generation compiled to WebAssembly
+    
+    \item \textbf{FROSTGATE Cross-Chain Bridge}: A trustless bidirectional Base\,$\longleftrightarrow$\,Solana bridge using Hyperlane message passing and SP1 STARK proofs, with event-level validation, rate limiting, and circuit breakers
 \end{enumerate}
 
-The x0 protocol consists of eight interoperating programs deployed on Solana, plus an off-chain WASM cryptographic library:
+The x0 protocol consists of nine interoperating programs deployed on Solana, two EVM contracts on Base, two SP1 STARK proof circuits, and an off-chain WASM cryptographic library:
 
 \begin{itemize}
     \item \textbf{x0-guard}: Policy enforcement via transfer hooks
@@ -184,94 +187,23 @@ The x0 protocol consists of eight interoperating programs deployed on Solana, pl
     \item \textbf{x0-reputation}: Trust scoring and transaction history with temporal decay
     \item \textbf{x0-wrapper}: USDC-backed stable wrapper token with timelocked governance
     \item \textbf{x0-zk-verifier}: On-chain Groth16 zero-knowledge proof verification for confidential transfers
+    \item \textbf{x0-bridge}: Cross-chain bridge program (FROSTGATE) with Hyperlane integration and SP1 STARK proof verification
     \item \textbf{x0-common}: Shared types, constants, error codes, and utilities
 \end{itemize}
 
-In addition, the protocol includes an off-chain component:
+The protocol also includes EVM and off-chain components:
 
 \begin{itemize}
+    \item \textbf{X0LockContract} (Solidity): USDC lock contract on Base for inbound bridge transfers
+    \item \textbf{X0UnlockContract} (Solidity): USDC release contract on Base for outbound bridge transfers
+    \item \textbf{sp1-evm-prover}: SP1 STARK circuit proving EVM transaction inclusion via MPT proofs
+    \item \textbf{sp1-solana-prover}: SP1 STARK circuit proving Solana account inclusion via fanout-16 Merkle proofs and validator quorum
     \item \textbf{x0-zk-proofs}: WebAssembly module compiled from Rust, providing client-side Groth16 proof generation using \texttt{solana-zk-token-sdk}
 \end{itemize}
 
-\subsubsection{Architecture Diagram}
+\subsubsection{Architecture Overview}
 
-\begin{center}
-\begin{tikzpicture}[
-    node distance=1.8cm and 2.0cm,
-    % External systems (Solana ecosystem)
-    external/.style={rectangle, rounded corners=3pt, draw=gray!80, fill=gray!15, 
-        minimum width=2.0cm, minimum height=0.8cm, text centered, font=\footnotesize},
-    % Core x0 programs
-    program/.style={rectangle, rounded corners=3pt, draw=blue!70, fill=blue!10, 
-        minimum width=2.0cm, minimum height=0.8cm, text centered, font=\footnotesize},
-    % Shared library
-    library/.style={rectangle, rounded corners=3pt, draw=green!70!black, fill=green!10, 
-        minimum width=2.0cm, minimum height=0.8cm, text centered, font=\footnotesize},
-    % WASM off-chain module
-    wasm/.style={rectangle, rounded corners=3pt, draw=purple!70, fill=purple!10, 
-        minimum width=2.0cm, minimum height=0.8cm, text centered, font=\footnotesize},
-    % Arrow styles
-    arrow/.style={->, >=stealth, thick, color=gray!70},
-    lbl/.style={font=\tiny, fill=white, inner sep=1pt}
-]
-    % --- Row 0: External systems ---
-    \node[external] (usdc) {USDC (SPL)};
-    \node[external, right=of usdc] (token22) {Token-2022};
-    
-    % --- Row 1: Core programs (4 nodes, spaced evenly) ---
-    \node[program, below=of usdc, xshift=-1.0cm] (wrapper) {x0-wrapper};
-    \node[program, right=of wrapper] (token) {x0-token};
-    \node[program, right=of token] (guard) {x0-guard};
-    \node[program, right=of guard] (zkverifier) {x0-zk-verifier};
-    
-    % --- Row 2: Core programs (3 nodes, centered under row 1) ---
-    \node[program, below=of token, xshift=-1.0cm] (escrow) {x0-escrow};
-    \node[program, right=of escrow] (registry) {x0-registry};
-    \node[program, right=of registry] (reputation) {x0-reputation};
-    
-    % --- Row 3: Shared library + WASM ---
-    \node[library, below=1.6cm of registry] (common) {x0-common};
-    \node[wasm, right=3.0cm of common] (zkproofs) {x0-zk-proofs};
-    
-    % --- External dependencies (upward arrows) ---
-    \draw[arrow] (wrapper) -- (usdc);
-    \draw[arrow] (token) -- (token22);
-    \draw[arrow] (guard.north) -- ++(0,0.4) -| (token22);
-    
-    % --- Internal CPI calls (solid arrows) ---
-    \draw[arrow] (token) -- (guard) node[lbl, midway, above] {hook};
-    \draw[arrow] (wrapper) -- (token);
-    \draw[arrow] (escrow) -- (reputation) node[lbl, midway, above] {CPI};
-    \draw[arrow] (guard) -- (reputation) node[lbl, midway, right] {CPI};
-    \draw[arrow] (registry) -- (reputation);
-    \draw[arrow] (token) -- (zkverifier) node[lbl, midway, above] {CPI};
-    
-    % --- WASM to on-chain (dotted arrow) ---
-    \draw[arrow, dotted, color=purple!60] (zkproofs) -- (zkverifier) node[lbl, midway, right] {proofs};
-    
-    % --- Common library links (dashed arrows) ---
-    \draw[arrow, dashed] (escrow) -- (common);
-    \draw[arrow, dashed] (registry) -- (common);
-    \draw[arrow, dashed] (reputation) -- (common);
-    \draw[arrow, dashed] (wrapper.south) -- ++(0,-0.5) -| (common.west);
-    \draw[arrow, dashed] (guard.south) -- ++(0,-0.5) -| (common.north);
-    \draw[arrow, dashed] (zkverifier.south) -- ++(0,-0.5) -| (common.east);
-    
-    % --- Legend (well below the diagram) ---
-    \matrix[below=2.0cm of common, anchor=center, column sep=6pt, row sep=0pt] {
-        \node[external, minimum width=1.2cm, minimum height=0.45cm, font=\tiny] {External}; &
-        \node[program, minimum width=1.2cm, minimum height=0.45cm, font=\tiny] {Program}; &
-        \node[library, minimum width=1.2cm, minimum height=0.45cm, font=\tiny] {Library}; &
-        \node[wasm, minimum width=1.2cm, minimum height=0.45cm, font=\tiny] {WASM}; &
-        \node[font=\tiny] (la) {}; \draw[arrow] (la.west) -- ++(0.7,0) node[right, font=\tiny] {CPI}; &
-        \node[font=\tiny] (lb) {}; \draw[arrow, dashed] (lb.west) -- ++(0.7,0) node[right, font=\tiny] {uses}; \\
-    };
-\end{tikzpicture}
-\end{center}
-
-\begin{center}
-\small\textit{Figure 1: x0 Protocol Architecture. Gray nodes are external Solana programs. Blue nodes are x0 on-chain programs. Green is the shared library. Purple is the off-chain WASM module for client-side proof generation.}
-\end{center}
+The x0 protocol is organized in four layers. At the top, external Solana ecosystem programs---USDC (SPL Token) and Token-2022---provide the underlying token infrastructure and extension framework. The core layer comprises nine on-chain programs: \textbf{x0-token} configures the Token-2022 mint with transfer hook and confidential transfer extensions; \textbf{x0-guard} implements the transfer hook, enforcing per-transaction and daily spending policies via Merkle or Bloom filter whitelists and invoking \textbf{x0-reputation} via CPI for trust-aware validation; \textbf{x0-wrapper} manages USDC-to-x0-USD wrapping with cryptographic reserve invariants; \textbf{x0-escrow} provides conditional payment escrow with dispute resolution, also backed by reputation CPI; \textbf{x0-registry} handles agent discovery and capability advertisement; \textbf{x0-zk-verifier} performs on-chain Groth16 proof verification for confidential transfers; and \textbf{x0-bridge} orchestrates cross-chain bridging via Hyperlane message passing and SP1 STARK proof verification, with CPI into x0-wrapper for reserve-backed minting and burning. All on-chain programs share types, constants, and error codes through the \textbf{x0-common} library crate. In the off-chain layer, \textbf{x0-zk-proofs} is a Rust-to-WASM module that generates client-side Groth16 proofs for the ZK verifier, while \textbf{sp1-evm-prover} and \textbf{sp1-solana-prover} are SP1 guest circuits that produce STARK proofs of EVM transaction inclusion and Solana account inclusion, respectively. The cross-chain layer comprises two Solidity contracts on Base---\textbf{X0LockContract} (locking USDC and dispatching Hyperlane messages to x0-bridge) and \textbf{X0UnlockContract} (verifying SP1 proofs and releasing USDC)---completing the bidirectional bridge.
 
 \section{Preliminaries}
 
@@ -1607,7 +1539,7 @@ No computationally bounded adversary can produce a valid proof for a false state
 \end{theorem}
 
 \begin{proof}
-Follows from the knowledge-soundness of Groth16 under the $q$-type knowledge-of-exponent assumption in bilinear groups. The verifier program re-derives the verification via \texttt{solana-zk-token-sdk}'s \texttt{verify()} method, which checks the Groth16 pairing equation. \qed
+Follows from the knowledge-soundness of Groth16 under the $q$-type knowledge-of-exponent assumption in bilinear groups. The verifier re-derives the check via \texttt{solana-zk-token-sdk}'s \texttt{verify()}, which evaluates the Groth16 pairing equation. \qed
 \end{proof}
 
 \section{Security Analysis}
@@ -1621,6 +1553,7 @@ We consider the following adversaries:
     \item \textbf{Malicious Service}: Service provider attempts fraud
     \item \textbf{Malicious Agent}: Agent attempts reputation manipulation
     \item \textbf{Wrapper Attack}: Attacker attempts reserve drain
+    \item \textbf{Bridge Attack}: Attacker attempts cross-chain fund extraction (see Section~14.10 for bridge-specific analysis)
 \end{enumerate}
 
 \subsection{Attack Scenarios and Mitigations}
@@ -1729,9 +1662,11 @@ Merkle verification & $O(\log m)$ & $O(\log m)$ \\
 Bloom verification & $O(k)$ & $O(1)$ \\
 Reputation update & $O(1)$ & $O(1)$ \\
 Registry search & $O(N)$ & $O(1)$ \\
+STARK proof verification & $O(1)$ & $O(|\pi|)$ \\
+Event log validation & $O(E \cdot T)$ & $O(1)$ \\
 \hline
 \end{tabular}
-\caption{Computational Complexity ($n$ = window size, $m$ = whitelist size, $k$ = hash count, $N$ = registered agents)}
+\caption{Computational Complexity ($n$ = window size, $m$ = whitelist size, $k$ = hash count, $N$ = registered agents, $E$ = event count, $T$ = topics per event, $|\pi|$ = proof size)}
 \end{table}
 
 \subsection{On-Chain Costs}
@@ -1750,6 +1685,11 @@ WrapperConfig & 243 & 0.0025 \\
 WrapperStats & 137 & 0.0018 \\
 ProofContext & 248 & 0.0026 \\
 AdminAction & 120 & 0.0016 \\
+BridgeConfig & 589 & 0.0053 \\
+BridgeMessage & 200 & 0.0022 \\
+EVMProofContext & 3,180 & 0.024 \\
+BridgeOutMessage & 153 & 0.0019 \\
+BridgeAdminAction & 148 & 0.0018 \\
 \hline
 \end{tabular}
 \caption{Account Sizes and Rent Costs (at 0.00000348 SOL/byte-epoch)}
@@ -1771,6 +1711,10 @@ Validate transfer (Bloom) & 18,000 & 180ms \\
 Create escrow & 28,000 & 280ms \\
 Registry listing & 35,000 & 350ms \\
 Reputation update & 15,000 & 150ms \\
+Handle message (bridge) & 42,000 & 420ms \\
+Verify EVM proof (STARK) & 500,000 & 5,000ms \\
+Execute mint (bridge) & 200,000 & 2,000ms \\
+Initiate bridge out & 180,000 & 1,800ms \\
 \hline
 \end{tabular}
 \caption{Transaction Performance (1 CU $\approx$ 10 µs)}
@@ -1809,6 +1753,654 @@ OpenBazaar and Augur implement on-chain reputation but lack:
 
 x0's reputation oracle addresses these limitations.
 
+\section{FROSTGATE: Trustless Cross-Chain Bridge}
+
+\subsection{Problem Statement}
+
+Autonomous agent payments are inherently multi-chain.\ An agent purchasing compute on Base must pay a service provider on Solana, and vice versa.\ Existing bridge architectures---relying on multisig committees (Wormhole), optimistic fraud windows (Across), or centralized attestors (LayerZero)---introduce trust assumptions incompatible with the permissionless, real-time settlement guarantees agents require.\ A compromised bridge committee can fabricate deposits, drain reserves, and halt all cross-chain commerce.
+
+We introduce \emph{FROSTGATE}, a bidirectional Base\,$\longleftrightarrow$\,Solana bridge that eliminates all off-chain trust assumptions by combining:
+\begin{enumerate}
+    \item \textbf{Hyperlane message passing} for cross-chain message delivery with on-chain sender verification,
+    \item \textbf{SP1 STARK proofs} for trustless verification of source-chain state transitions, and
+    \item \textbf{CPI-enforced reserve invariants} through the existing x0-wrapper mint/burn interface (Section~8).
+\end{enumerate}
+
+The result is a bridge where every cross-chain transfer is backed by a succinct cryptographic proof of the source-chain event, verified \emph{on-chain} by the destination chain, with no trusted relayer, committee, or oracle in the critical path.
+
+\subsection{Definitions}
+
+\begin{definition}[Cross-Chain Bridge]
+A cross-chain bridge $\mathcal{B} = (\texttt{Lock}, \texttt{Relay}, \texttt{Prove}, \texttt{Mint})$ is a tuple of protocols that transfers value from a source chain $\mathcal{C}_s$ to a destination chain $\mathcal{C}_d$ such that for every deposit of amount $a$ on $\mathcal{C}_s$, exactly $a$ units of the wrapped asset are minted on $\mathcal{C}_d$, and no minting occurs without a corresponding valid deposit.
+\end{definition}
+
+\begin{definition}[Bridge Soundness]
+A bridge $\mathcal{B}$ is \emph{sound} if for all probabilistic polynomial-time adversaries $\mathcal{A}$:
+\begin{equation}
+\Pr\left[\texttt{Mint}(a', r') = 1 \;\middle|\; \nexists\; \texttt{Lock}(a', r') \text{ on } \mathcal{C}_s\right] \leq \text{negl}(\lambda)
+\end{equation}
+where $a'$ is the minted amount, $r'$ is the recipient, and $\lambda$ is the security parameter.
+\end{definition}
+
+\begin{definition}[Bridge Completeness]
+A bridge $\mathcal{B}$ is \emph{complete} if for every valid deposit $\texttt{Lock}(a, r)$ on $\mathcal{C}_s$ that is finalized, there exists a protocol execution that produces $\texttt{Mint}(a, r)$ on $\mathcal{C}_d$.
+\end{definition}
+
+\subsection{Architecture Overview}
+
+FROSTGATE operates as two mirror-image protocols:
+
+\begin{itemize}
+    \item \textbf{Inbound} (Base $\to$ Solana): Lock USDC on Base, prove the lock via SP1 STARK, mint x0-USD on Solana.
+    \item \textbf{Outbound} (Solana $\to$ Base): Burn x0-USD on Solana, prove the burn via SP1 STARK, unlock USDC on Base.
+\end{itemize}
+
+\begin{center}
+\begin{tikzpicture}[
+    node distance=1.2cm and 1.8cm,
+    chain/.style={rectangle, rounded corners=3pt, draw=orange!70, fill=orange!10,
+        minimum width=2.0cm, minimum height=0.7cm, text centered, font=\footnotesize},
+    program/.style={rectangle, rounded corners=3pt, draw=blue!70, fill=blue!10,
+        minimum width=2.0cm, minimum height=0.7cm, text centered, font=\footnotesize},
+    prover/.style={rectangle, rounded corners=3pt, draw=red!60, fill=red!8,
+        minimum width=2.0cm, minimum height=0.7cm, text centered, font=\footnotesize},
+    msg/.style={rectangle, rounded corners=3pt, draw=green!60!black, fill=green!8,
+        minimum width=2.0cm, minimum height=0.7cm, text centered, font=\footnotesize},
+    arrow/.style={->, >=stealth, thick, color=gray!70},
+    lbl/.style={font=\tiny, fill=white, inner sep=1pt}
+]
+    % Title labels
+    \node[font=\footnotesize\bfseries, color=orange!80!black] (baselbl) at (-3.5, 1.5) {Base (EVM)};
+    \node[font=\footnotesize\bfseries, color=blue!80!black] (sollbl) at (3.5, 1.5) {Solana (SVM)};
+    
+    % --- Inbound flow (top) ---
+    \node[chain] (lock) at (-3.5, 0.5) {X0LockContract};
+    \node[msg] (hyp1) at (0, 0.5) {Hyperlane};
+    \node[program] (handle) at (3.5, 0.5) {handle\_message};
+    
+    \node[prover] (evmprover) at (0, -0.7) {SP1 EVM Prover};
+    \node[program] (verify) at (3.5, -0.7) {verify\_evm\_proof};
+    \node[program] (mint) at (3.5, -1.9) {execute\_mint};
+    \node[program] (wrapper1) at (6.5, -1.9) {x0-wrapper};
+    
+    \draw[arrow] (lock) -- (hyp1) node[lbl, midway, above] {dispatch};
+    \draw[arrow] (hyp1) -- (handle) node[lbl, midway, above] {process};
+    \draw[arrow, dotted, color=red!50] (evmprover) -- (verify) node[lbl, midway, above] {$\pi_{\text{STARK}}$};
+    \draw[arrow] (verify) -- (mint);
+    \draw[arrow] (mint) -- (wrapper1) node[lbl, midway, above] {CPI};
+    
+    % --- Outbound flow (bottom) ---
+    \node[program] (bridgeout) at (3.5, -3.4) {bridge\_out};
+    \node[program] (wrapper2) at (6.5, -3.4) {x0-wrapper};
+    \node[prover] (solprover) at (0, -3.4) {SP1 Sol Prover};
+    \node[chain] (unlock) at (-3.5, -3.4) {X0UnlockContract};
+    
+    \draw[arrow] (bridgeout) -- (wrapper2) node[lbl, midway, above] {CPI burn};
+    \draw[arrow, dotted, color=red!50] (solprover) -- (unlock) node[lbl, midway, above] {$\pi_{\text{STARK}}$};
+    \draw[arrow, dashed] (bridgeout) -- (solprover) node[lbl, midway, above] {PDA};
+    
+    % Divider
+    \draw[dashed, gray!40] (0, 1.2) -- (0, -4.2);
+    
+    % Labels
+    \node[font=\tiny, color=gray] at (-3.5, -0.1) {\textit{Inbound (Base$\to$Solana)}};
+    \node[font=\tiny, color=gray] at (-3.5, -4.0) {\textit{Outbound (Solana$\to$Base)}};
+\end{tikzpicture}
+\end{center}
+
+\begin{center}
+\small\textit{Figure 2: FROSTGATE Bridge Architecture. Orange nodes are EVM contracts. Blue nodes are Solana programs. Red nodes are off-chain SP1 provers.}
+\end{center}
+
+\subsection{On-Chain State}
+
+\subsubsection{Bridge Configuration}
+
+The bridge is governed by a singleton PDA seeded by \texttt{["bridge\_config"]}:
+
+\begin{lstlisting}[language=Rust,caption=BridgeConfig State Account]
+pub struct BridgeConfig {
+    pub admin: Pubkey,             // Multisig administrator
+    pub hyperlane_mailbox: Pubkey, // Hyperlane mailbox program
+    pub sp1_verifier: Pubkey,      // SP1 verifier program
+    pub wrapper_program: Pubkey,   // x0-wrapper for CPI
+    pub wrapper_config: Pubkey,    // x0-wrapper config PDA
+    pub usdc_mint: Pubkey,         // USDC mint on Solana
+    pub wrapper_mint: Pubkey,      // x0-USD mint
+    pub bridge_usdc_reserve: Pubkey, // USDC reserve token account
+    pub is_paused: bool,
+    pub total_bridged_in: u64,     // All-time inflow (USDC micro-units)
+    pub total_bridged_out: u64,    // All-time outflow
+    pub nonce: u64,                // Monotonic message nonce
+    pub daily_inflow_volume: u64,  // Rolling 24h inflow
+    pub daily_outflow_volume: u64, // Rolling 24h outflow
+    pub allowed_evm_contracts: [[u8; 20]; 10], // Whitelisted EVM contracts
+    pub supported_domains: [u32; 10],          // Hyperlane domain IDs
+    pub bridge_out_nonce: u64,     // Outbound monotonic nonce
+}
+\end{lstlisting}
+
+\subsubsection{Bridge Message}
+
+Each inbound Hyperlane message creates a PDA seeded by \texttt{["bridge\_message", message\_id]}:
+
+\begin{lstlisting}[language=Rust,caption=BridgeMessage State Account]
+pub struct BridgeMessage {
+    pub message_id: [u8; 32],   // SHA-256(origin || sender || body)
+    pub origin_domain: u32,     // e.g., 8453 (Base)
+    pub sender: [u8; 32],       // EVM address zero-padded to 32 bytes
+    pub recipient: Pubkey,      // Solana destination
+    pub amount: u64,            // USDC micro-units (6 decimals)
+    pub status: BridgeMessageStatus, // Received -> ProofVerified -> Minted
+    pub evm_tx_hash: [u8; 32],  // Source transaction hash
+    pub nonce: u64,             // Sender nonce for ordering
+}
+\end{lstlisting}
+
+The message status follows a linear state machine:
+
+\begin{equation}
+\texttt{Received} \xrightarrow{\texttt{verify\_evm\_proof}} \texttt{ProofVerified} \xrightarrow{\texttt{execute\_mint}} \texttt{Minted}
+\end{equation}
+
+Each transition is irreversible and guarded by status preconditions, ensuring no double-minting.
+
+\subsubsection{EVM Proof Context}
+
+Successful STARK verification creates a PDA seeded by \texttt{["evm\_proof", message\_id]}:
+
+\begin{lstlisting}[language=Rust,caption=EVMProofContext State Account]
+pub struct EVMProofContext {
+    pub proof_type: EVMProofType,
+    pub verified: bool,
+    pub verified_at: i64,           // Clock timestamp
+    pub block_hash: [u8; 32],       // Proven EVM block hash
+    pub block_number: u64,
+    pub tx_hash: [u8; 32],          // Proven transaction hash
+    pub from: [u8; 20],             // EVM sender
+    pub to: [u8; 20],               // EVM contract address
+    pub value: u64,
+    pub event_logs: Vec<EVMEventLog>, // Extracted receipt logs
+    pub message_id: [u8; 32],       // Links to BridgeMessage
+}
+\end{lstlisting}
+
+\subsubsection{Bridge Out Message}
+
+Each outbound transfer creates a PDA seeded by {\small\texttt{["bridge\_out\_message",\allowbreak{} nonce.to\_le\_bytes()]}}:
+
+\begin{lstlisting}[language=Rust,caption=BridgeOutMessage State Account]
+pub struct BridgeOutMessage {
+    pub nonce: u64,                // Monotonic from BridgeConfig
+    pub solana_sender: Pubkey,     // Burn initiator
+    pub evm_recipient: [u8; 20],   // Base destination address
+    pub amount: u64,               // USDC micro-units
+    pub burn_tx_signature: [u8; 32], // Solana transaction signature
+    pub burned_at: i64,            // Burn timestamp
+    pub status: BridgeOutStatus,   // Burned -> Unlocked
+}
+\end{lstlisting}
+
+\subsection{Inbound Protocol (Base $\to$ Solana)}
+
+\subsubsection{Step 1: USDC Lock on Base}
+
+The \texttt{X0LockContract} (Solidity, OpenZeppelin) receives USDC via \texttt{transferFrom}, stores it in the contract, and dispatches a Hyperlane message:
+
+\begin{definition}[Bridge Message Body]
+The message body is a tightly-packed 80-byte encoding:
+\begin{equation}
+\texttt{body} = \texttt{solanaRecipient}_{[32]} \;\|\; \texttt{amount}_{\text{BE}[8]} \;\|\; \texttt{txHash}_{[32]} \;\|\; \texttt{nonce}_{\text{BE}[8]}
+\end{equation}
+where $\|$ denotes concatenation and subscripts indicate byte lengths. Big-endian encoding is used for all integer fields to match EVM conventions.
+\end{definition}
+
+The lock emits a \texttt{Locked} event with indexed parameters for efficient filtering:
+
+\begin{equation}
+\texttt{Locked}(\underbrace{\texttt{sender}}_{\text{indexed}}, \;\underbrace{\texttt{solanaRecipient}}_{\text{indexed}}, \;\texttt{amount}, \;\texttt{nonce}, \;\texttt{messageId})
+\end{equation}
+
+The event signature is the Keccak-256 hash of the full event declaration:
+\begin{equation}
+\texttt{topics}[0] = \texttt{keccak256}(\texttt{"Locked(address,bytes32,uint256,uint256,bytes32)"})
+\end{equation}
+
+This hash is stored as a protocol constant and used by both the SP1 circuit and the on-chain verifier to locate the deposit event in receipt logs.
+
+\subsubsection{Step 2: Hyperlane Message Delivery}
+
+The Hyperlane protocol relays the message body to Solana, invoking the bridge program's \texttt{handle\_message} instruction. The instruction validates:
+
+\begin{algorithm}
+\caption{Inbound Message Reception (\texttt{handle\_message})}
+\begin{algorithmic}[1]
+\Procedure{HandleMessage}{$\texttt{origin}, \texttt{sender}, \texttt{body}$}
+    \State \textbf{require} $\neg\, \texttt{config.is\_paused}$ \Comment{Bridge not paused}
+    \State \textbf{require} $\texttt{ValidateProcessAuthority}(\texttt{caller})$ \Comment{Hyperlane PDA}
+    \State \textbf{require} $\texttt{origin} \in \texttt{config.supported\_domains}$ \Comment{Known domain}
+    \State \textbf{require} $\texttt{sender}[0..12] = \mathbf{0}^{12}$ \Comment{EVM format}
+    \State $\texttt{evm\_addr} \gets \texttt{sender}[12..32]$
+    \State \textbf{require} $\texttt{evm\_addr} \in \texttt{config.allowed\_evm\_contracts}$ \Comment{Whitelist}
+    \State \textbf{require} $|\texttt{body}| = 80$ \Comment{Exact body size}
+    \State $(\texttt{recipient}, a, \texttt{tx\_hash}, n) \gets \texttt{decode}(\texttt{body})$
+    \State \textbf{require} $a \in [\texttt{MIN\_AMOUNT}, \texttt{MAX\_AMOUNT}]$ \Comment{Bounds check}
+    \State \textbf{require} $\texttt{daily\_inflow} + a \leq \texttt{MAX\_DAILY\_INFLOW}$ \Comment{Rate limit}
+    \State $\texttt{id} \gets \texttt{SHA256}(\texttt{origin} \;\|\; \texttt{sender} \;\|\; \texttt{body})$
+    \State \textbf{create} $\texttt{BridgeMessage}(\texttt{id}, \texttt{origin}, \texttt{sender}, \texttt{recipient}, a)$
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+\begin{remark}[Hyperlane Process Authority]
+The bridge validates the caller by deriving the Hyperlane process authority PDA:
+\begin{multline}
+\texttt{process\_authority} = \texttt{PDA}_{\texttt{mailbox}}\bigl(\texttt{"hyperlane"} \;\|\; \texttt{"-"} \;\|\;\\
+\texttt{"process\_authority"} \;\|\; \texttt{"-"} \;\|\; \texttt{bridge\_id}\bigr)
+\end{multline}
+This ensures only messages routed through the Hyperlane mailbox can trigger bridge message creation, even if an adversary constructs a valid-looking message body.
+\end{remark}
+
+\subsubsection{Step 3: STARK Proof Verification}
+
+After the BridgeMessage is created, an off-chain relayer generates an SP1 STARK proof of the EVM transaction and submits it via \texttt{verify\_evm\_proof}. This instruction:
+
+\begin{enumerate}
+    \item Invokes the SP1 verifier program via CPI to verify the STARK proof
+    \item Decodes the public inputs: $(h_{\text{block}},\, n_{\text{block}},\, h_{\text{tx}},\, \mathit{from},\, \mathit{to},\, v,\, \mathit{success},\, \mathit{logs})$
+    \item Validates $\texttt{success} = \texttt{true}$ (EVM transaction succeeded)
+    \item Validates $\texttt{tx\_hash} = \texttt{BridgeMessage.evm\_tx\_hash}$
+    \item \textbf{Validates the Locked event} via \texttt{validate\_locked\_event()}
+    \item Creates the \texttt{EVMProofContext} PDA and transitions the message to \texttt{ProofVerified}
+\end{enumerate}
+
+\begin{definition}[Locked Event Validation]
+Given a set of proven event logs $\mathcal{L}$ and a BridgeMessage $M$, the function $\texttt{validate\_locked\_event}(\mathcal{L}, M)$ succeeds if and only if there exists $\ell \in \mathcal{L}$ such that all of the following hold:
+
+\begin{enumerate}
+    \item $\ell.\texttt{contract} \in \texttt{config.allowed\_evm\_contracts}$ \hfill (trusted contract)
+    \item $\ell.\texttt{topics}[0] = \texttt{LOCKED\_EVENT\_SIGNATURE}$ \hfill (correct event type)
+    \item $|\ell.\texttt{topics}| \geq 3$ \hfill (has indexed params)
+    \item $\ell.\texttt{topics}[2] = M.\texttt{recipient}$ \hfill (recipient match)
+    \item $|\ell.\texttt{data}| \geq 96$ \hfill (three ABI words)
+    \item $\texttt{abi.decode}(\ell.\texttt{data}).\texttt{amount} = M.\texttt{amount}$ \hfill (amount match)
+    \item $\texttt{abi.decode}(\ell.\texttt{data}).\texttt{nonce} = M.\texttt{nonce}$ \hfill (nonce match)
+\end{enumerate}
+\end{definition}
+
+\begin{theorem}[Event Validation Soundness]
+\label{thm:event-validation}
+Under the collision resistance of Keccak-256 and the soundness of the SP1 STARK proof system, no computationally bounded adversary can cause \texttt{validate\_locked\_event} to accept for a BridgeMessage $M$ unless a genuine \texttt{Locked} event with matching recipient, amount, and nonce was emitted by a whitelisted contract in a finalized Base transaction.
+\end{theorem}
+
+\begin{proof}
+Suppose an adversary $\mathcal{A}$ causes acceptance without a genuine event. Then either:
+\begin{enumerate}
+    \item $\mathcal{A}$ forged the SP1 proof (contradicts STARK soundness with $\leq 2^{-100}$ forgery probability),
+    \item $\mathcal{A}$ found a collision in the event signature (contradicts Keccak-256 collision resistance), or
+    \item $\mathcal{A}$ caused a whitelisted contract to emit a \texttt{Locked} event with the adversary's chosen parameters---but this requires calling \texttt{lock()} with matching \texttt{amount} and \texttt{solanaRecipient}, which requires the adversary to actually deposit USDC, making the event genuine.
+\end{enumerate}
+All cases lead to contradiction. \qed
+\end{proof}
+
+\subsubsection{Step 4: Mint Execution}
+
+Once the proof is verified, \texttt{execute\_mint} performs the mint via two CPIs:
+
+\begin{algorithm}
+\caption{Mint Execution (\texttt{execute\_mint})}
+\begin{algorithmic}[1]
+\Procedure{ExecuteMint}{$\texttt{msg}, \texttt{proof\_ctx}$}
+    \State \textbf{require} $\texttt{msg.status} = \texttt{ProofVerified}$
+    \State \textbf{require} $\texttt{proof\_ctx.is\_fresh}()$ \Comment{Within 600s window}
+    \State \textbf{require} $\texttt{bridge\_reserve.amount} \geq \texttt{msg.amount}$
+    \State
+    \State \textit{// Step 1: Move USDC from bridge reserve to wrapper reserve}
+    \State $\texttt{TransferChecked}(\texttt{bridge\_reserve} \to \texttt{wrapper\_reserve}, \texttt{msg.amount})$
+    \State
+    \State \textit{// Step 2: CPI to x0-wrapper::bridge\_mint}
+    \State $\texttt{x0\_wrapper::bridge\_mint}(\texttt{recipient}, \texttt{msg.amount})$
+    \State
+    \State $\texttt{msg.status} \gets \texttt{Minted}$
+    \State $\texttt{config.total\_bridged\_in} \mathrel{+}= \texttt{msg.amount}$
+    \State \textbf{if} $\texttt{config.total\_bridged\_in} > \Theta_{\text{in}}$ \textbf{then}
+        \State \quad $\texttt{config.is\_paused} \gets \texttt{true}$ \Comment{Circuit breaker}
+    \State \textbf{end if}
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+\begin{remark}[Wrapper Reserve Invariant Preservation]
+The two-step CPI sequence preserves the wrapper reserve invariant (Theorem~8.1). Step 1 transfers USDC into the wrapper's reserve account, increasing $R_{\text{USDC}}$. Step 2 calls \texttt{bridge\_mint}, which validates that the bridge program is the authorized caller, then mints x0-USD, increasing $S_{\text{x0-USD}}$ by the same amount. The wrapper's own \texttt{bridge\_mint} handler independently verifies the reserve balance, ensuring $R_{\text{USDC}}(t) \geq S_{\text{x0-USD}}(t)$ holds after every bridge mint.
+\end{remark}
+
+\subsection{Outbound Protocol (Solana $\to$ Base)}
+
+\subsubsection{Step 1: Burn on Solana}
+
+The \texttt{initiate\_bridge\_out} instruction validates the outbound request and burns x0-USD:
+
+\begin{algorithm}
+\caption{Outbound Bridge Initiation (\texttt{initiate\_bridge\_out})}
+\begin{algorithmic}[1]
+\Procedure{BridgeOut}{$\texttt{sender}, \texttt{evm\_recipient}_{[20]}, a$}
+    \State \textbf{require} $\neg\, \texttt{config.is\_paused}$
+    \State \textbf{require} $\texttt{evm\_recipient} \neq \mathbf{0}^{20}$
+    \State \textbf{require} $a \in [\texttt{MIN\_AMOUNT}, \texttt{MAX\_AMOUNT}]$
+    \State \textbf{require} $\texttt{daily\_outflow} + a \leq \texttt{MAX\_DAILY\_OUTFLOW}$
+    \State
+    \State \textit{// CPI: burn x0-USD (returns USDC to bridge reserve)}
+    \State $\texttt{x0\_wrapper::bridge\_burn}(\texttt{sender}, a)$
+    \State
+    \State $n \gets \texttt{config.bridge\_out\_nonce}$
+    \State $\texttt{config.bridge\_out\_nonce} \mathrel{+}= 1$
+    \State \textbf{create} $\texttt{BridgeOutMessage}(n, \texttt{sender}, \texttt{evm\_recipient}, a)$
+    \State $\texttt{config.total\_bridged\_out} \mathrel{+}= a$
+    \State \textbf{if} $\texttt{config.total\_bridged\_out} > \Theta_{\text{out}}$ \textbf{then}
+        \State \quad $\texttt{config.is\_paused} \gets \texttt{true}$ \Comment{Circuit breaker}
+    \State \textbf{end if}
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+The \texttt{bridge\_burn} CPI performs the inverse of \texttt{bridge\_mint}: it burns the sender's x0-USD tokens and transfers the equivalent USDC from the wrapper's reserve back to the bridge's reserve, preserving the wrapper reserve invariant.
+
+\subsubsection{Step 2: Proof Generation and Unlock on Base}
+
+An off-chain relayer observes the \texttt{BridgeOutMessage} PDA, generates an SP1 STARK proof of its existence and validity, and submits the proof to the \texttt{X0UnlockContract} on Base:
+
+\begin{algorithm}
+\caption{Outbound Unlock (\texttt{X0UnlockContract.unlock})}
+\begin{algorithmic}[1]
+\Procedure{Unlock}{$\texttt{proofBytes}, \texttt{publicValues}$}
+    \State $(P_{\text{bridge}}, n, \texttt{sender}, r, a, t, h) \gets \texttt{abi.decode}(\texttt{publicValues})$
+    \State \textbf{require} $P_{\text{bridge}} = \texttt{BRIDGE\_PROGRAM\_ID}$ \Comment{Correct program}
+    \State \textbf{require} $\neg\, \texttt{processedNonces}[n]$ \Comment{Replay protection}
+    \State \textbf{require} $a \leq \texttt{maxPerTransaction}$
+    \State \textbf{require} $\texttt{dailyVolume} + a \leq \texttt{maxDailyVolume}$
+    \State $\texttt{SP1\_VERIFIER.verifyProof}(\texttt{programVKey}, \texttt{publicValues}, \texttt{proofBytes})$
+    \State $\texttt{processedNonces}[n] \gets \texttt{true}$
+    \State $\texttt{USDC.safeTransfer}(r, a)$
+    \State \textbf{emit} $\texttt{BridgeUnlocked}(n, \texttt{sender}, r, a)$
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{SP1 STARK Proof Circuits}
+
+Both proof circuits are implemented as SP1 guest programs that execute inside the SP1 zkVM.\ The zkVM produces a STARK proof that the guest program executed correctly on the claimed inputs, which can be verified on-chain in $\sim$500,000 compute units.
+
+\subsubsection{EVM Proof Circuit (Base $\to$ Solana)}
+
+The EVM proof circuit proves that a specific transaction was included in a finalized Base block and that its receipt contains the expected event logs.
+
+\begin{definition}[EVM Transaction Inclusion Proof]
+\label{def:evm-proof}
+Let $H_{\text{rlp}}$ denote the RLP-encoded block header, $T_{\text{rlp}}$ the transaction, $R_{\text{rlp}}$ the receipt, and $\pi_T, \pi_R$ the respective MPT proofs. Given witness $w = (H_{\text{rlp}}, T_{\text{rlp}}, R_{\text{rlp}}, \pi_T, \pi_R)$, the circuit proves:
+\begin{align}
+h_{\text{block}} &= \texttt{keccak256}(H_{\text{rlp}}) \label{eq:block-hash}\\
+r_{\text{tx}} &= \texttt{RLP.decode}(H_{\text{rlp}}).\texttt{txRoot} \label{eq:tx-root}\\
+r_{\text{rcpt}} &= \texttt{RLP.decode}(H_{\text{rlp}}).\texttt{receiptsRoot} \label{eq:rcpt-root}\\
+\texttt{MPT.verify}(r_{\text{tx}},\; k_T,\; T_{\text{rlp}},\; \pi_T) &= \texttt{true} \label{eq:tx-mpt}\\
+\texttt{MPT.verify}(r_{\text{rcpt}},\; k_R,\; R_{\text{rlp}},\; \pi_R) &= \texttt{true} \label{eq:rcpt-mpt}\\
+R.\texttt{status} &= 1 \label{eq:status}
+\end{align}
+and outputs public inputs $x = (h_{\text{block}},\, n_{\text{block}},\, h_{\text{tx}},\, \textit{from},\, \textit{to},\, v,\, \textit{success},\, \textit{logs})$.
+\end{definition}
+
+The Merkle Patricia Trie (MPT) proofs anchor the transaction and receipt to the block header's state roots. Since the block hash is a public input committed to by the proof, the verifier on Solana can cross-reference it with a known finalized block hash.
+
+\begin{lstlisting}[language=Rust,caption=EVM Proof Public Inputs (sp1-evm-prover)]
+pub struct EVMProofPublicInputs {
+    pub block_hash: [u8; 32],
+    pub block_number: u64,
+    pub tx_hash: [u8; 32],
+    pub from: [u8; 20],
+    pub to: [u8; 20],
+    pub value: u64,
+    pub success: bool,
+    pub event_logs: Vec<EventLog>,
+}
+
+pub struct EventLog {
+    pub contract_address: [u8; 20],
+    pub topics: Vec<[u8; 32]>,
+    pub data: Vec<u8>,
+}
+\end{lstlisting}
+
+\subsubsection{Solana Proof Circuit (Solana $\to$ Base)}
+
+The Solana proof circuit proves that a \texttt{BridgeOutMessage} PDA exists in a confirmed Solana bank state, with the correct owner and data contents.
+
+\begin{definition}[Solana Account Inclusion Proof]
+\label{def:sol-proof}
+Let $D$ denote the account data, $\pi_M$ the Merkle proof, $B$ the bank hash components, and $V$ the set of validator votes. Given witness $w = (D, \pi_M, B, V)$, the circuit proves:
+\begin{align}
+(n, s_{\text{addr}}, r, a, t, s) &= \texttt{parse}(D) \label{eq:parse}\\
+s &= \texttt{Burned} \label{eq:burned-status}\\
+\texttt{owner}(D) &= P_{\text{bridge}} \label{eq:owner}\\
+h_{\text{acct}} &= \texttt{SHA256}(D) \label{eq:acct-hash}\\
+\texttt{Merkle}_{16}(h_{\text{acct}},\, \pi_M,\, \delta_{\text{hash}}) &= \texttt{true} \label{eq:merkle16}\\
+h_{\text{bank}} &= \texttt{SHA256}(h_{\text{parent}} \| \delta_{\text{hash}} \| \sigma_c \| h_{\text{blk}}) \label{eq:bank-hash}\\
+\sum_{\substack{v \in V :\\\texttt{Ed25519}(v.\mathit{pk},\, h_{\text{bank}},\, v.\sigma)}} v.\mathit{stake} &\geq \tfrac{2}{3} {\textstyle\sum_{v \in V}} v.\mathit{stake} \label{eq:quorum}
+\end{align}
+and outputs $x = \texttt{abi.encode}(P_{\text{bridge}},\, n,\, s_{\text{addr}},\, r,\, a,\, t,\, h_{\text{acct}})$.
+\end{definition}
+
+\begin{remark}[Fanout-16 Merkle Trees]
+Solana's accounts delta hash uses a fanout-16 Merkle tree rather than a binary tree. Each internal node hashes up to 16 children, reducing tree depth to $\log_{16} N$. The circuit verifies inclusion using this wider branching factor, with $\texttt{MERKLE\_FANOUT} = 16$ as a protocol constant.
+\end{remark}
+
+\begin{remark}[Validator Quorum Verification]
+The circuit verifies that validators representing at least $\frac{2}{3}$ of the epoch's total stake have signed the bank hash via Ed25519 signatures. This mirrors Solana's Tower BFT consensus, ensuring the proven state is finalized.
+\end{remark}
+
+\begin{lstlisting}[language=Rust,caption=Solana Proof Public Inputs (sp1-solana-prover)]
+pub struct SolanaProofPublicInputs {
+    pub bridge_program_id: [u8; 32],
+    pub nonce: u64,
+    pub solana_sender: [u8; 32],
+    pub evm_recipient: [u8; 20],
+    pub amount: u64,
+    pub burn_timestamp: i64,
+    pub account_hash: [u8; 32],
+}
+
+impl SolanaProofPublicInputs {
+    /// ABI-encodes to 7x32-byte words for EVM verification
+    pub fn abi_encode(&self) -> Vec<u8> { /* 224 bytes */ }
+}
+\end{lstlisting}
+
+\subsection{Rate Limiting and Circuit Breakers}
+
+FROSTGATE implements defense-in-depth rate limiting on both chains.
+
+\subsubsection{Per-Transaction Bounds}
+
+All transfer amounts are bounded:
+\begin{equation}
+\texttt{MIN\_BRIDGE\_AMOUNT} = 10 \times 10^6 \leq a \leq 100{,}000 \times 10^6 = \texttt{MAX\_BRIDGE\_AMOUNT\_PER\_TX}
+\end{equation}
+corresponding to \$10--\$100{,}000 USDC per transaction.
+
+\subsubsection{Daily Rolling Window}
+
+Both inflow and outflow are subject to 24-hour rolling limits:
+\begin{equation}
+\sum_{\{i \,:\, t_i > t - 86400\}} a_i \leq \Phi_{\max} = 5{,}000{,}000 \times 10^6 \quad (\$5\text{M daily})
+\end{equation}
+
+The daily counters reset automatically when $t_{\text{current}} - t_{\text{last\_reset}} \geq 86{,}400$ seconds.
+
+\subsubsection{Circuit Breakers}
+
+Cumulative volume triggers an automatic pause:
+
+\begin{equation}
+\texttt{total\_bridged\_in} > \Theta_{\text{in}} = 10^{14} \implies \texttt{is\_paused} \gets \texttt{true}
+\end{equation}
+
+The threshold $\Theta_{\text{in}} = \Theta_{\text{out}} = 100{,}000{,}000 \times 10^6$ (\$100M) provides a hard upper bound on cumulative bridge exposure. Once triggered, only the admin can unpause after investigation.
+
+\begin{theorem}[Bounded Bridge Exposure]
+For all execution traces, the maximum USDC at risk in the bridge at any time is bounded by:
+\begin{equation}
+\texttt{exposure}(t) \leq \min\left(\Theta_{\text{in}}, \; \Phi_{\max} \cdot \left\lceil \frac{t - t_0}{86400} \right\rceil\right)
+\end{equation}
+where $t_0$ is the bridge deployment timestamp.
+\end{theorem}
+
+\begin{proof}
+The daily inflow cap ensures no more than $\Phi_{\max}$ enters per 24-hour window. The circuit breaker provides an absolute ceiling of $\Theta_{\text{in}}$. Since locked USDC on Base can only be unlocked via a valid outbound proof, the exposure is bounded by the lesser of the cumulative cap and the sum of daily windows. \qed
+\end{proof}
+
+\subsection{Proof Freshness}
+
+To prevent indefinite replay of verified proofs, proof contexts enforce a temporal validity window:
+
+\begin{definition}[Bridge Proof Freshness]
+An \texttt{EVMProofContext} $C$ is \emph{fresh} at time $t$ if and only if:
+\begin{equation}
+t - C.\texttt{verified\_at} < \Delta_{\text{bridge}} = 600 \text{ seconds}
+\end{equation}
+\end{definition}
+
+The 10-minute window accounts for Hyperlane relay latency ($\sim$2--3 minutes), SP1 proving time ($\sim$1 minute), and transaction submission buffer. The window is deliberately larger than the ZK verifier's 300-second window (Section~9) to accommodate cross-chain timing uncertainty.
+
+\subsection{EVM Contracts}
+
+Both Solidity contracts inherit OpenZeppelin's \texttt{Ownable}, \texttt{Pausable}, and \texttt{ReentrancyGuard}, providing:
+
+\begin{itemize}
+    \item \textbf{Pausability}: Owner can halt all lock/unlock operations in an emergency.
+    \item \textbf{Reentrancy protection}: Guards against callback-based exploits during USDC transfers.
+    \item \textbf{Rate limiting}: Independent daily volume caps and per-transaction limits on both contracts.
+    \item \textbf{Admin recovery}: Timelocked \texttt{adminUnlock} on the lock contract allows fund recovery if the Solana-side flow permanently fails.
+\end{itemize}
+
+\subsubsection{X0LockContract}
+
+The lock contract manages inbound flow (Base $\to$ Solana):
+
+\begin{enumerate}
+    \item Receives USDC via \texttt{SafeERC20.safeTransferFrom}
+    \item Validates amount bounds and daily rate limits
+    \item Dispatches the 80-byte message body via Hyperlane's \texttt{IMailbox.dispatch}
+    \item Emits the \texttt{Locked} event with the sender, recipient, amount, nonce, and Hyperlane message ID
+    \item Increments the per-user nonce for replay ordering
+\end{enumerate}
+
+\subsubsection{X0UnlockContract}
+
+The unlock contract manages outbound flow (Solana $\to$ Base):
+
+\begin{enumerate}
+    \item Receives an SP1 proof and ABI-encoded public values
+    \item Verifies the proof via \texttt{ISP1Verifier.verifyProof(vkey, values, proof)}
+    \item Validates the bridge program ID matches the expected Solana program
+    \item Checks replay protection via the \texttt{processedNonces} mapping
+    \item Transfers USDC to the EVM recipient via \texttt{SafeERC20.safeTransfer}
+\end{enumerate}
+
+\subsection{Administrative Controls}
+
+FROSTGATE administrative operations are subject to a 48-hour timelock, matching the x0-wrapper governance model (Section~8):
+
+\begin{enumerate}
+    \item \texttt{schedule\_admin\_action}: Creates a \texttt{BridgeAdminAction} PDA with a monotonic nonce and records the action type (e.g., add/remove EVM contract, add/remove domain, change trusted program addresses).
+    \item \texttt{execute\_admin\_action}: Executes after $\texttt{current\_time} - \texttt{scheduled\_at} \geq 172{,}800$ seconds. Validates the action nonce, type, and that the action has not been cancelled.
+    \item \texttt{cancel\_admin\_action}: Allows the admin to abort a scheduled action before execution.
+\end{enumerate}
+
+This timelock gives users and monitoring systems 48 hours to detect and respond to potentially malicious configuration changes (e.g., adding an attacker-controlled EVM contract to the whitelist).
+
+\subsection{Security Analysis}
+
+\subsubsection{Threat Model}
+
+We extend the base protocol's threat model (Section~10) with bridge-specific adversaries:
+
+\begin{enumerate}
+    \item \textbf{Proof Forgery}: Adversary attempts to fabricate an SP1 proof for a nonexistent deposit.
+    \item \textbf{Amount Inflation}: Adversary deposits $a$ but attempts to mint $a' > a$ on the destination chain.
+    \item \textbf{Recipient Redirection}: Adversary deposits for recipient $r$ but attempts to mint for $r' \neq r$.
+    \item \textbf{Replay Attack}: Adversary attempts to reuse a valid proof to mint twice.
+    \item \textbf{Hyperlane Compromise}: Adversary controls the Hyperlane relayer and crafts arbitrary messages.
+    \item \textbf{EVM Contract Impersonation}: Adversary deploys a malicious contract that emits fake \texttt{Locked} events.
+\end{enumerate}
+
+\subsubsection{Mitigations}
+
+\begin{table}[ht!]
+\centering
+\begin{tabular}{|l|l|}
+\hline
+\textbf{Attack Vector} & \textbf{Mitigation} \\
+\hline
+Proof Forgery & SP1 STARK soundness ($\leq 2^{-100}$) \\
+Amount Inflation & Event amount validated against BridgeMessage \\
+Recipient Redirect & Event recipient validated against BridgeMessage \\
+Replay (inbound) & BridgeMessage PDA uniqueness + status machine \\
+Replay (outbound) & \texttt{processedNonces} mapping on EVM \\
+Hyperlane Compromise & SP1 proof required \emph{in addition} to Hyperlane message \\
+Contract Impersonation & Event contract address checked against whitelist \\
+\hline
+\end{tabular}
+\caption{FROSTGATE Attack Vectors and Mitigations}
+\end{table}
+
+\begin{theorem}[FROSTGATE Soundness]
+\label{thm:frostgate-soundness}
+Under the soundness of the SP1 STARK proof system, the collision resistance of SHA-256 and Keccak-256, and the unforgeability of Ed25519 signatures, FROSTGATE is a sound cross-chain bridge (Definition~14.2).
+\end{theorem}
+
+\begin{proof}
+We show that no minting can occur without a corresponding genuine deposit.
+
+For \emph{inbound} transfers (Base $\to$ Solana):
+\begin{enumerate}
+    \item \texttt{execute\_mint} requires $\texttt{msg.status} = \texttt{ProofVerified}$.
+    \item The \texttt{ProofVerified} status is only set by \texttt{verify\_evm\_proof}, which validates an SP1 STARK proof.
+    \item The STARK proof commits to a block hash, transaction hash, and event logs (Definition~\ref{def:evm-proof}).
+    \item \texttt{validate\_locked\_event} (Theorem~\ref{thm:event-validation}) ensures the proven event logs contain a genuine \texttt{Locked} event with matching amount, recipient, and nonce from a whitelisted contract.
+    \item Therefore, minting requires a valid EVM transaction that deposited the exact amount for the exact recipient.
+\end{enumerate}
+
+For \emph{outbound} transfers (Solana $\to$ Base):
+\begin{enumerate}
+    \item \texttt{X0UnlockContract.unlock} requires a valid SP1 proof of a \texttt{BridgeOutMessage} PDA.
+    \item The STARK proof commits to the account hash, nonce, amount, and recipient (Definition~\ref{def:sol-proof}).
+    \item Validator quorum verification (Equation~\ref{eq:quorum}) ensures the proven state is finalized under Solana's Tower BFT consensus.
+    \item The \texttt{processedNonces} mapping prevents replay.
+    \item Therefore, unlocking requires a genuine burn transaction on Solana with finalized consensus. \qed
+\end{enumerate}
+\end{proof}
+
+\begin{theorem}[FROSTGATE Completeness]
+FROSTGATE is a complete cross-chain bridge (Definition~14.3), given liveness of the Hyperlane relayer (inbound) and the SP1 prover operator (both directions).
+\end{theorem}
+
+\begin{proof}
+For any valid \texttt{Lock} on Base: (1) the Hyperlane relayer delivers the message, creating a \texttt{BridgeMessage} PDA; (2) the SP1 prover generates a valid proof of the EVM transaction; (3) the \texttt{verify\_evm\_proof} instruction verifies the proof and transitions the message to \texttt{ProofVerified}; (4) the \texttt{execute\_mint} instruction mints x0-USD. Each step is deterministic given valid inputs. The only liveness assumptions are on the relayer and prover, which are permissionless roles. \qed
+\end{proof}
+
+\begin{theorem}[Reserve Invariant Under Bridge Operations]
+For all execution traces involving bridge mint and burn operations:
+\begin{equation}
+\forall t: R_{\text{USDC}}(t) \geq S_{\text{x0-USD}}(t)
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+Bridge mint: \texttt{execute\_mint} first transfers $a$ USDC from the bridge reserve to the wrapper reserve ($R_{\text{USDC}} \mathrel{+}= a$), then calls \texttt{bridge\_mint} to mint $a$ x0-USD ($S_{\text{x0-USD}} \mathrel{+}= a$). The wrapper's \texttt{bridge\_mint} handler independently verifies $R_{\text{USDC}} \geq S_{\text{x0-USD}}$ before minting.
+
+Bridge burn: \texttt{bridge\_burn} burns $a$ x0-USD ($S_{\text{x0-USD}} \mathrel{-}= a$) and transfers $a$ USDC from the wrapper reserve to the bridge reserve ($R_{\text{USDC}} \mathrel{-}= a$). The decrement is symmetric.
+
+In both cases the invariant is preserved by the wrapper's own validation (Theorem~8.1). \qed
+\end{proof}
+
 \section{Future Work}
 
 \subsection{Extended Zero-Knowledge Applications}
@@ -1821,13 +2413,14 @@ With the foundational ZK verification infrastructure now deployed (Section~9), s
     \item \textbf{Recursive proof composition}: Batch multiple proof verifications into a single on-chain instruction using recursive SNARKs, reducing per-transaction compute costs
 \end{itemize}
 
-\subsection{Cross-Chain Support}
+\subsection{Cross-Chain Extension}
 
-Extend to other chains via:
+With FROSTGATE operational on Base\,$\longleftrightarrow$\,Solana (Section~14), the architecture generalizes to additional EVM chains:
 \begin{itemize}
-    \item Wormhole integration for cross-chain messages and proof relay
-    \item Unified reputation across chains, anchored to Solana as the settlement layer
-    \item Cross-chain escrow settlement with atomic swap guarantees
+    \item \textbf{Multi-chain deployment}: Deploy \texttt{X0LockContract} and \texttt{X0UnlockContract} instances on Ethereum mainnet, Arbitrum, Optimism, and other EVM chains, each with its own Hyperlane domain ID registered in BridgeConfig
+    \item \textbf{Non-EVM chains}: Extend the SP1 proof model to verify state inclusion on non-EVM chains (e.g., Cosmos via IBC, Aptos via Move proofs), enabling a unified cross-chain payment mesh
+    \item \textbf{Unified reputation across chains}: Anchor reputation scores to Solana as the settlement layer, with bridge-proven attestations propagating trust scores cross-chain
+    \item \textbf{Cross-chain escrow settlement}: Compose FROSTGATE with the escrow protocol (Section~5) to enable trustless cross-chain escrow with atomic settlement guarantees
 \end{itemize}
 
 \subsection{Machine Learning Integration}
@@ -1858,6 +2451,7 @@ We have presented x0, a comprehensive payment infrastructure for autonomous agen
     \item \textbf{USDC Wrapper}: Stable payments with cryptographic reserve invariants
     \item \textbf{Human-in-the-Loop}: Fallback mechanism for exceptional cases
     \item \textbf{Zero-Knowledge Verification}: On-chain Groth16 proof verification enabling confidential transfers with provable correctness
+    \item \textbf{FROSTGATE Bridge}: Trustless bidirectional Base\,$\longleftrightarrow$\,Solana bridging using SP1 STARK proofs and Hyperlane message passing, with event-level validation, rate limiting, and circuit breakers---eliminating all off-chain trust assumptions from cross-chain agent payments
 \end{enumerate}
 
 The protocol has been deployed on Solana devnet and is undergoing security audits. We invite the community to review the codebase at \texttt{github.com/x0-protocol} and provide feedback.
@@ -1915,6 +2509,18 @@ Groth, J. (2016). On the Size of Pairing-Based Non-interactive Arguments. EUROCR
 \bibitem{ristretto}
 Hamburg, M. (2015). Decaf: Eliminating cofactors through point compression. CRYPTO 2015. Extended to Ristretto255 for use with Curve25519.
 
+\bibitem{sp1}
+Succinct Labs. (2024). SP1: A performant, open-source zero-knowledge virtual machine. \url{https://docs.succinct.xyz}
+
+\bibitem{hyperlane}
+Hyperlane. (2024). Hyperlane: Permissionless Interoperability. \url{https://docs.hyperlane.xyz}
+
+\bibitem{stark}
+Ben-Sasson, E., Bentov, I., Horesh, Y., \& Riabzev, M. (2018). Scalable, transparent, and post-quantum secure computational integrity. IACR Cryptology ePrint Archive, 2018, 046.
+
+\bibitem{mpt}
+Wood, G. (2014). Ethereum: A Secure Decentralised Generalised Transaction Ledger. Ethereum Yellow Paper, Appendix D: Modified Merkle Patricia Trie.
+
 \end{thebibliography}
 
 \appendix
@@ -1923,14 +2529,20 @@ Hamburg, M. (2015). Decaf: Eliminating cofactors through point compression. CRYP
 
 Error codes follow a structured numbering scheme where the high byte identifies the program category and the low nibble groups errors by subcategory:
 
-\begin{table}[ht!]
-\centering
-\scriptsize
+{\scriptsize
 \setlength{\tabcolsep}{4pt}
 \renewcommand{\arraystretch}{0.9}
-\begin{tabular}{|l|l|l|}
+\begin{longtable}{|l|l|l|}
 \hline
 \textbf{Range} & \textbf{Name} & \textbf{Description} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Range} & \textbf{Name} & \textbf{Description} \\
+\hline
+\endhead
+\hline
+\endfoot
 \hline
 \multicolumn{3}{|c|}{\textit{x0-guard: Policy Errors (0x1100--0x110F)}} \\
 \hline
@@ -2028,9 +2640,49 @@ Error codes follow a structured numbering scheme where the high byte identifies 
 0x1713 & ProofSizeMismatch & Proof data size mismatch \\
 0x1720 & ArithmeticOverflow & Arithmetic overflow \\
 \hline
-\end{tabular}
-\caption{Protocol Error Codes (representative subset; 7 enums, 60+ total codes). Full reference in source: \texttt{x0-common/src/error.rs}}
-\end{table}
+\multicolumn{3}{|c|}{\textit{x0-bridge: Configuration Errors (0x1800--0x1806)}} \\
+\hline
+0x1800 & BridgeAlreadyInitialized & Bridge already initialized \\
+0x1802 & BridgePaused & Bridge operations are paused \\
+0x1803 & Unauthorized & Admin required \\
+0x1805 & InvalidSP1Verifier & Invalid SP1 verifier program \\
+\hline
+\multicolumn{3}{|c|}{\textit{x0-bridge: Message Errors (0x1810--0x1819)}} \\
+\hline
+0x1810 & UnsupportedDomain & Origin domain not supported \\
+0x1811 & UnauthorizedSenderContract & Sender contract not in allowed list \\
+0x1812 & MessageAlreadyProcessed & Message already processed \\
+0x1817 & InvalidProcessAuthority & PDA derivation mismatch \\
+0x1818 & InvalidSenderFormat & EVM sender zero-padding check \\
+0x1819 & CircuitBreakerTriggered & Bridge volume exceeds threshold \\
+\hline
+\multicolumn{3}{|c|}{\textit{x0-bridge: Proof Errors (0x1820--0x182D)}} \\
+\hline
+0x1820 & ProofVerificationFailed & STARK proof verification failed \\
+0x1823 & ProofExpired & Proof exceeded validity window \\
+0x1826 & DepositEventNotFound & Locked event not in proof logs \\
+0x1828 & EventContractMismatch & Event from unauthorized contract \\
+0x1829 & EventRecipientMismatch & Event recipient $\neq$ message recipient \\
+0x182A & EventAmountMismatch & Event amount $\neq$ message amount \\
+0x182B & EventNonceMismatch & Event nonce $\neq$ expected nonce \\
+\hline
+\multicolumn{3}{|c|}{\textit{x0-bridge: Rate Limiting (0x1830--0x183F)}} \\
+\hline
+0x1830 & AmountTooSmall & Bridge amount $<$ minimum \\
+0x1831 & AmountTooLarge & Bridge amount $>$ per-tx max \\
+0x1832 & DailyInflowLimitExceeded & Daily inflow limit exceeded \\
+0x1833 & InsufficientBridgeReserve & Insufficient reserve for minting \\
+\hline
+\multicolumn{3}{|c|}{\textit{x0-bridge: Outbound Errors (0x1870--0x1876)}} \\
+\hline
+0x1870 & BridgeOutPaused & Outbound operations paused \\
+0x1873 & DailyOutflowLimitExceeded & Daily outflow limit exceeded \\
+0x1874 & OutboundCircuitBreakerTriggered & Outbound circuit breaker \\
+0x1875 & InvalidEvmRecipient & Invalid EVM recipient address \\
+\hline
+\caption{Protocol Error Codes (representative subset; 8 enums, 90+ total codes). Full reference in source: \texttt{x0-common/src/error.rs}}
+\end{longtable}
+}
 
 \section{Program Addresses}
 
@@ -2047,6 +2699,7 @@ x0-registry & \texttt{Bebty49EPhFoANKDw7TqLQ2bX61ackNav5iNkj36eVJo} \\
 x0-reputation & \texttt{FfzkTWRGAJQPDePbujZdEhKHqC1UpqvDrpv4TEiWpx6y} \\
 x0-wrapper & \texttt{EomiXBbg94Smu4ipDoJtuguazcd1KjLFDFJt2fCabvJ8} \\
 x0-zk-verifier & \texttt{zQWSrznKgcK8aHA4ry7xbSCdP36FqgUHj766YM3pwre} \\
+x0-bridge & \texttt{4FuyKfQysHxcTeNJtz5rBzzS8kmjn2DdkgXH1Q7edXa7} \\
 \hline
 \end{tabular}
 \caption{Deployed Program Addresses}
@@ -2080,6 +2733,11 @@ $P$ & ElGamal public key ($P = s \cdot G$) \\
 $s$ & ElGamal secret scalar \\
 $\pi$ & Zero-knowledge proof ($\pi = (A, B, C)$ for Groth16) \\
 $\Delta_{\text{proof}}$ & Proof freshness window (300 seconds) \\
+$\Delta_{\text{bridge}}$ & Bridge proof freshness window (600 seconds) \\
+$\Theta_{\text{in}}, \Theta_{\text{out}}$ & Circuit breaker thresholds (\$100M) \\
+$\Phi_{\max}$ & Maximum daily bridge volume (\$5M) \\
+$\delta_{\text{hash}}$ & Solana accounts delta hash \\
+$h_{\text{bank}}$ & Solana bank hash \\
 \hline
 \end{tabular}
 \caption{Mathematical Notation Reference}
@@ -2156,6 +2814,7 @@ const isValid = await verifyPaymentProof(connection, proof, {
 \texttt{ZkVerifierClient} & On-chain ZK proof verification \\
 \texttt{x402} & HTTP 402 payment request/proof utilities \\
 \texttt{blink} & Generate Solana Actions for human approval \\
+\texttt{BridgeClient} & Cross-chain bridge operations (lock, verify, mint, bridge-out) \\
 \hline
 \end{tabular}
 \caption{SDK Module Overview}
