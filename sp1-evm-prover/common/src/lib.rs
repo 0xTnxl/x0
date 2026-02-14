@@ -96,15 +96,20 @@ pub struct EVMProofWitness {
 // Constants
 // ============================================================================
 
-/// keccak256("Locked(address,bytes32,uint256,uint256)")
+/// keccak256("Locked(address,bytes32,uint256,uint256,bytes32)")
 /// Event signature for the X0LockContract.Locked event
+///
+/// Solidity declaration:
+///   event Locked(address indexed sender, bytes32 indexed solanaRecipient,
+///                uint256 amount, uint256 nonce, bytes32 messageId)
+///
+/// Topics:  [0] = this hash, [1] = sender, [2] = solanaRecipient
+/// Data:    abi.encode(amount, nonce, messageId)
 pub const LOCKED_EVENT_SIGNATURE: [u8; 32] = [
-    // This will be computed at build time or hardcoded after contract deployment
-    // For now, placeholder — the actual value depends on the event ABI
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x6e, 0xa4, 0xb3, 0xe5, 0xd5, 0xca, 0x80, 0xe1,
+    0xec, 0x33, 0xaf, 0x6e, 0x82, 0x4b, 0x1d, 0x7f,
+    0x59, 0x5b, 0x0b, 0x2f, 0x6d, 0x9d, 0x72, 0x42,
+    0x22, 0xfc, 0xab, 0xd1, 0x8c, 0x36, 0xba, 0x15,
 ];
 
 /// keccak256("Transfer(address,address,uint256)")

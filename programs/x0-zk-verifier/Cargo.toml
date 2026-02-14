@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["x0 Protocol <dev@x0protocol.dev>"]
 description = "On-chain Groth16 zero-knowledge proof verification for Token-2022 confidential transfers"
-repository = "https://github.com/x0-protocol/x0-01"
+repository = "https://github.com/0xtnxl/x0"
 license = "Apache-2.0"
 
 [lib]

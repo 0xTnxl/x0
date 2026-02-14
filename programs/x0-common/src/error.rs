@@ -823,6 +823,30 @@ pub enum X0BridgeError {
     #[msg("Proof amount does not match message amount")]
     ProofAmountMismatch, // 0x1827
 
+    /// Event emitted by unauthorized contract (not in allowed_evm_contracts)
+    #[msg("Event emitted by unauthorized EVM contract")]
+    EventContractMismatch, // 0x1828
+
+    /// Solana recipient in Locked event does not match bridge message
+    #[msg("Locked event recipient does not match bridge message recipient")]
+    EventRecipientMismatch, // 0x1829
+
+    /// Amount in Locked event does not match bridge message amount
+    #[msg("Locked event amount does not match bridge message amount")]
+    EventAmountMismatch, // 0x182A
+
+    /// Nonce in Locked event does not match bridge message nonce
+    #[msg("Locked event nonce does not match expected nonce")]
+    EventNonceMismatch, // 0x182B
+
+    /// Event log data too short to decode
+    #[msg("Event log data too short to decode Locked event fields")]
+    EventDataTooShort, // 0x182C
+
+    /// Event log missing required indexed topics
+    #[msg("Event log missing required indexed topics")]
+    EventTopicsMissing, // 0x182D
+
     // ========================================================================
     // Amount & Rate Limiting Errors (0x1830-0x183F)
     // ========================================================================

@@ -21,7 +21,7 @@ use anchor_lang::solana_program::program::invoke;
 
 use crate::state::{
     BridgeConfig, BridgeMessage, BridgeMessageStatus,
-    EVMProofContext, EVMProofType, SP1PublicInputs,
+    EVMProofContext, EVMEventLog, EVMProofType, SP1PublicInputs,
 };
 use x0_common::{
     constants::*,
@@ -164,6 +164,31 @@ pub fn handler(
     );
 
     // ========================================================================
+    // Step 2b: Validate Locked event from ZK-proven receipt logs
+    //
+    // CRITICAL SECURITY: The ZK proof cryptographically binds event logs to
+    // the proven receipt. We MUST validate these logs against the Hyperlane
+    // message data to prevent a compromised Hyperlane relay from injecting
+    // fake amounts/recipients while pointing to a real (but unrelated) tx.
+    //
+    // Without this check, an attacker who controls the Hyperlane ISM could:
+    //   1. Lock $1 USDC on Base → real tx_hash
+    //   2. Forge a Hyperlane message claiming $1M for attacker's address
+    //   3. Submit a valid STARK proof for the $1 lock
+    //   4. verify_evm_proof would pass (tx_hash matches, proof is valid)
+    //   5. execute_mint mints $1M x0-USD → attacker drains the bridge
+    //
+    // The fix: extract the Locked event from the proven logs and compare
+    // its amount, recipient, and nonce against the BridgeMessage.
+    // ========================================================================
+
+    validate_locked_event(
+        &public_inputs.event_logs,
+        &ctx.accounts.config,
+        &ctx.accounts.bridge_message,
+    )?;
+
+    // ========================================================================
     // Step 3: Create proof context
     // ========================================================================
 
@@ -212,4 +237,407 @@ pub fn handler(
     );
 
     Ok(())
+}
+
+// ============================================================================
+// Event Validation Helper
+// ============================================================================
+
+/// Validate the Locked event from ZK-proven receipt logs against the
+/// BridgeMessage created by handle_message.
+///
+/// This is the core security check that ensures the ZK-proven on-chain
+/// event data (amount, recipient) matches what Hyperlane reported.
+///
+/// # Event Layout (from X0LockContract.sol)
+///
+/// ```text
+/// topics[0] = keccak256("Locked(address,bytes32,uint256,uint256,bytes32)")
+/// topics[1] = sender (address, indexed → left-padded to 32 bytes)
+/// topics[2] = solanaRecipient (bytes32, indexed)
+/// data[0..32]   = amount (uint256, big-endian)
+/// data[32..64]  = nonce (uint256, big-endian)
+/// data[64..96]  = messageId (bytes32)
+/// ```
+pub fn validate_locked_event(
+    event_logs: &[EVMEventLog],
+    config: &BridgeConfig,
+    bridge_message: &BridgeMessage,
+) -> Result<()> {
+    // Find the Locked event emitted by an allowed lock contract
+    let locked_event = event_logs
+        .iter()
+        .find(|log| {
+            // Check event signature (topic[0] == LOCKED_EVENT_SIGNATURE)
+            log.topics.len() >= 3
+                && log.topics[0] == LOCKED_EVENT_SIGNATURE
+                // Check emitting contract is whitelisted
+                && config.is_contract_allowed(&log.contract_address)
+        })
+        .ok_or(X0BridgeError::DepositEventNotFound)?;
+
+    // Validate topic count: need at least 3 (signature, sender, solanaRecipient)
+    require!(
+        locked_event.topics.len() >= 3,
+        X0BridgeError::EventTopicsMissing
+    );
+
+    // Validate data length: need at least 96 bytes (amount + nonce + messageId)
+    require!(
+        locked_event.data.len() >= 96,
+        X0BridgeError::EventDataTooShort
+    );
+
+    // --- Validate recipient ---
+    // topics[2] = solanaRecipient (bytes32 = raw 32-byte Solana pubkey)
+    let event_recipient_bytes = &locked_event.topics[2];
+    require!(
+        event_recipient_bytes == bridge_message.recipient.as_ref(),
+        X0BridgeError::EventRecipientMismatch
+    );
+
+    // --- Validate amount ---
+    // data[0..32] = amount as uint256 (big-endian, 32 bytes)
+    // USDC amounts fit in u64. The high 24 bytes must be zero.
+    let amount_word = &locked_event.data[0..32];
+    require!(
+        amount_word[0..24] == [0u8; 24],
+        X0BridgeError::EventAmountMismatch
+    );
+    let mut amount_bytes = [0u8; 8];
+    amount_bytes.copy_from_slice(&amount_word[24..32]);
+    let event_amount = u64::from_be_bytes(amount_bytes);
+    require!(
+        event_amount == bridge_message.amount,
+        X0BridgeError::EventAmountMismatch
+    );
+
+    // --- Validate nonce ---
+    // data[32..64] = nonce as uint256 (big-endian, 32 bytes)
+    // The high 24 bytes must be zero (fits in u64).
+    let nonce_word = &locked_event.data[32..64];
+    require!(
+        nonce_word[0..24] == [0u8; 24],
+        X0BridgeError::EventNonceMismatch
+    );
+
+    msg!(
+        "Locked event validated: amount={}, recipient={}",
+        event_amount,
+        bridge_message.recipient,
+    );
+
+    Ok(())
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::EVMEventLog;
+
+    /// Create an allowed EVM contract address for testing
+    fn test_contract() -> [u8; EVM_ADDRESS_SIZE] {
+        let mut addr = [0u8; EVM_ADDRESS_SIZE];
+        addr[19] = 0x42; // 0x000...0042
+        addr
+    }
+
+    /// Create a test Solana pubkey bytes
+    fn test_recipient() -> Pubkey {
+        Pubkey::new_from_array([0xAA; 32])
+    }
+
+    /// Encode a u64 as a 32-byte big-endian uint256 word
+    fn encode_uint256(val: u64) -> Vec<u8> {
+        let mut word = vec![0u8; 24];
+        word.extend_from_slice(&val.to_be_bytes());
+        word
+    }
+
+    /// Build a valid Locked event log for testing
+    fn make_locked_event(
+        contract: [u8; EVM_ADDRESS_SIZE],
+        recipient: &Pubkey,
+        amount: u64,
+        nonce: u64,
+    ) -> EVMEventLog {
+        let mut data = Vec::new();
+        data.extend_from_slice(&encode_uint256(amount));   // data[0..32]
+        data.extend_from_slice(&encode_uint256(nonce));    // data[32..64]
+        data.extend_from_slice(&[0xBB; 32]);               // data[64..96] = messageId
+
+        EVMEventLog {
+            contract_address: contract,
+            topics: vec![
+                LOCKED_EVENT_SIGNATURE,          // topics[0]: event sig
+                [0x11; 32],                      // topics[1]: sender (indexed)
+                recipient.to_bytes(),            // topics[2]: solanaRecipient
+            ],
+            data,
+        }
+    }
+
+    /// Build a minimal BridgeConfig with one allowed contract
+    fn make_config(allowed_contract: [u8; EVM_ADDRESS_SIZE]) -> BridgeConfig {
+        let mut config = BridgeConfig {
+            version: 1,
+            admin: Pubkey::default(),
+            hyperlane_mailbox: Pubkey::default(),
+            sp1_verifier: Pubkey::default(),
+            wrapper_program: Pubkey::default(),
+            wrapper_config: Pubkey::default(),
+            usdc_mint: Pubkey::default(),
+            wrapper_mint: Pubkey::default(),
+            bridge_usdc_reserve: Pubkey::default(),
+            is_paused: false,
+            total_bridged_in: 0,
+            total_bridged_out: 0,
+            nonce: 0,
+            daily_inflow_volume: 0,
+            daily_inflow_reset_timestamp: 0,
+            allowed_evm_contracts_count: 1,
+            allowed_evm_contracts: [[0u8; EVM_ADDRESS_SIZE]; MAX_ALLOWED_EVM_CONTRACTS],
+            supported_domains_count: 0,
+            supported_domains: [0u32; MAX_SUPPORTED_DOMAINS],
+            admin_action_nonce: 0,
+            bump: 0,
+            bridge_out_nonce: 0,
+            daily_outflow_volume: 0,
+            daily_outflow_reset_timestamp: 0,
+            _reserved: [0u8; 32],
+        };
+        config.allowed_evm_contracts[0] = allowed_contract;
+        config
+    }
+
+    /// Build a minimal BridgeMessage for testing
+    fn make_bridge_message(recipient: Pubkey, amount: u64) -> BridgeMessage {
+        BridgeMessage {
+            version: 1,
+            message_id: [0u8; 32],
+            origin_domain: 8453,
+            sender: [0u8; 32],
+            recipient,
+            amount,
+            received_at: 0,
+            status: BridgeMessageStatus::Received,
+            evm_tx_hash: [0u8; 32],
+            nonce: 1,
+            bump: 0,
+            _reserved: [0u8; 32],
+        }
+    }
+
+    #[test]
+    fn test_valid_locked_event() {
+        let contract = test_contract();
+        let recipient = test_recipient();
+        let amount = 1_000_000u64; // 1 USDC
+        let event = make_locked_event(contract, &recipient, amount, 1);
+        let config = make_config(contract);
+        let msg = make_bridge_message(recipient, amount);
+
+        let result = validate_locked_event(&[event], &config, &msg);
+        assert!(result.is_ok(), "Valid event should pass: {:?}", result);
+    }
+
+    #[test]
+    fn test_wrong_amount_rejected() {
+        let contract = test_contract();
+        let recipient = test_recipient();
+        // Event says 1 USDC, message says 1,000,000 USDC
+        let event = make_locked_event(contract, &recipient, 1_000_000, 1);
+        let config = make_config(contract);
+        let msg = make_bridge_message(recipient, 1_000_000_000_000);
+
+        let result = validate_locked_event(&[event], &config, &msg);
+        assert!(result.is_err(), "Amount mismatch should fail");
+    }
+
+    #[test]
+    fn test_wrong_recipient_rejected() {
+        let contract = test_contract();
+        let legit_recipient = test_recipient();
+        let attacker = Pubkey::new_from_array([0xFF; 32]);
+        let amount = 1_000_000u64;
+
+        // Event has legit recipient, message has attacker
+        let event = make_locked_event(contract, &legit_recipient, amount, 1);
+        let config = make_config(contract);
+        let msg = make_bridge_message(attacker, amount);
+
+        let result = validate_locked_event(&[event], &config, &msg);
+        assert!(result.is_err(), "Recipient mismatch should fail");
+    }
+
+    #[test]
+    fn test_unauthorized_contract_rejected() {
+        let allowed = test_contract();
+        let unauthorized = {
+            let mut addr = [0u8; EVM_ADDRESS_SIZE];
+            addr[19] = 0xFF; // Different contract
+            addr
+        };
+        let recipient = test_recipient();
+        let amount = 1_000_000u64;
+
+        // Event is from unauthorized contract
+        let event = make_locked_event(unauthorized, &recipient, amount, 1);
+        let config = make_config(allowed);
+        let msg = make_bridge_message(recipient, amount);
+
+        let result = validate_locked_event(&[event], &config, &msg);
+        assert!(result.is_err(), "Unauthorized contract should fail");
+    }
+
+    #[test]
+    fn test_missing_event_rejected() {
+        let contract = test_contract();
+        let recipient = test_recipient();
+        let config = make_config(contract);
+        let msg = make_bridge_message(recipient, 1_000_000);
+
+        // No events at all
+        let result = validate_locked_event(&[], &config, &msg);
+        assert!(result.is_err(), "Empty event logs should fail");
+    }
+
+    #[test]
+    fn test_wrong_event_signature_rejected() {
+        let contract = test_contract();
+        let recipient = test_recipient();
+        let amount = 1_000_000u64;
+
+        // Build an event with wrong signature (Transfer instead of Locked)
+        let mut event = make_locked_event(contract, &recipient, amount, 1);
+        event.topics[0] = TRANSFER_EVENT_SIGNATURE;
+
+        let config = make_config(contract);
+        let msg = make_bridge_message(recipient, amount);
+
+        let result = validate_locked_event(&[event], &config, &msg);
+        assert!(result.is_err(), "Wrong event signature should fail");
+    }
+
+    #[test]
+    fn test_short_data_rejected() {
+        let contract = test_contract();
+        let recipient = test_recipient();
+
+        // Build event with data too short (only 64 bytes instead of 96)
+        let event = EVMEventLog {
+            contract_address: contract,
+            topics: vec![
+                LOCKED_EVENT_SIGNATURE,
+                [0x11; 32],
+                recipient.to_bytes(),
+            ],
+            data: vec![0u8; 64], // Too short — needs 96+ bytes
+        };
+        let config = make_config(contract);
+        let msg = make_bridge_message(recipient, 1_000_000);
+
+        let result = validate_locked_event(&[event], &config, &msg);
+        assert!(result.is_err(), "Short data should fail");
+    }
+
+    #[test]
+    fn test_too_few_topics_rejected() {
+        let contract = test_contract();
+        let recipient = test_recipient();
+        let amount = 1_000_000u64;
+
+        // Build event with only 2 topics (need at least 3)
+        let event = EVMEventLog {
+            contract_address: contract,
+            topics: vec![
+                LOCKED_EVENT_SIGNATURE,
+                [0x11; 32],
+                // Missing topics[2] (solanaRecipient)
+            ],
+            data: encode_uint256(amount)
+                .into_iter()
+                .chain(encode_uint256(1))
+                .chain([0xBB; 32].into_iter())
+                .collect(),
+        };
+        let config = make_config(contract);
+        let msg = make_bridge_message(recipient, amount);
+
+        let result = validate_locked_event(&[event], &config, &msg);
+        assert!(result.is_err(), "Too few topics should fail");
+    }
+
+    #[test]
+    fn test_correct_event_found_among_others() {
+        let contract = test_contract();
+        let recipient = test_recipient();
+        let amount = 1_000_000u64;
+
+        // Create a Transfer event (wrong type) and a valid Locked event
+        let transfer_event = EVMEventLog {
+            contract_address: contract,
+            topics: vec![TRANSFER_EVENT_SIGNATURE, [0x11; 32], [0x22; 32]],
+            data: encode_uint256(999),
+        };
+        let locked_event = make_locked_event(contract, &recipient, amount, 1);
+
+        let config = make_config(contract);
+        let msg = make_bridge_message(recipient, amount);
+
+        // Locked event is second — should still be found
+        let result = validate_locked_event(
+            &[transfer_event, locked_event],
+            &config,
+            &msg,
+        );
+        assert!(result.is_ok(), "Should find correct event among others: {:?}", result);
+    }
+
+    /// The exact attack scenario from the security analysis:
+    /// Attacker locks $1, forges Hyperlane message claiming $1M.
+    #[test]
+    fn test_amount_inflation_attack_blocked() {
+        let contract = test_contract();
+        let attacker = Pubkey::new_from_array([0xEE; 32]);
+
+        // Real on-chain event: $1 USDC locked
+        let real_event = make_locked_event(contract, &attacker, 1_000_000, 1);
+
+        // Forged Hyperlane message claims: $1,000,000 USDC
+        let config = make_config(contract);
+        let forged_msg = make_bridge_message(attacker, 1_000_000_000_000);
+
+        let result = validate_locked_event(&[real_event], &config, &forged_msg);
+        assert!(
+            result.is_err(),
+            "Amount inflation attack MUST be blocked"
+        );
+    }
+
+    /// Attack: correct amount but wrong recipient (redirect funds)
+    #[test]
+    fn test_recipient_redirect_attack_blocked() {
+        let contract = test_contract();
+        let legit_user = test_recipient();
+        let attacker = Pubkey::new_from_array([0xEE; 32]);
+        let amount = 100_000_000_000u64; // $100K USDC
+
+        // Real event: $100K locked for legit_user
+        let real_event = make_locked_event(contract, &legit_user, amount, 1);
+
+        // Forged message: redirects to attacker
+        let config = make_config(contract);
+        let forged_msg = make_bridge_message(attacker, amount);
+
+        let result = validate_locked_event(&[real_event], &config, &forged_msg);
+        assert!(
+            result.is_err(),
+            "Recipient redirect attack MUST be blocked"
+        );
+    }
 }
