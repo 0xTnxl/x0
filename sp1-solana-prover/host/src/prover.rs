@@ -38,6 +38,17 @@ pub async fn generate_proof(
     witness: &SolanaProofWitness,
     mode: &str,
 ) -> Result<(Vec<u8>, Vec<u8>)> {
+    // Pre-validate the witness before spending compute on proof generation.
+    // This catches structural errors early (wrong account size, zeroed hashes,
+    // insufficient quorum) that would otherwise only surface as opaque circuit
+    // panics after minutes of proving.
+    info!("Pre-validating witness...");
+    witness
+        .validate()
+        .map_err(|e| anyhow::anyhow!(e))
+        .context("Witness pre-validation failed — fix inputs before proving")?;
+    info!("Witness pre-validation passed");
+
     info!("Setting up SP1 prover client (mode: {})...", mode);
 
     // Load the guest ELF at runtime

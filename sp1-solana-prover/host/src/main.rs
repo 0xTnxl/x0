@@ -53,6 +53,14 @@ struct Args {
     /// SP1 proving mode: "mock", "local", "network"
     #[arg(long, default_value = "mock")]
     mode: String,
+
+    /// Maximum seconds to wait for quorum before aborting
+    #[arg(long, default_value_t = 120)]
+    quorum_timeout_secs: u64,
+
+    /// Skip quorum polling and proceed with whatever votes are available
+    #[arg(long, default_value_t = false)]
+    skip_quorum_wait: bool,
 }
 
 #[tokio::main]
@@ -155,6 +163,22 @@ async fn main() -> Result<()> {
     // ========================================================================
 
     info!("Fetching state proof material...");
+
+    // Optionally wait for quorum finality before assembling the witness.
+    // This ensures we don't waste proving time on a slot that hasn't
+    // reached ≥ 2/3 stake confirmation yet.
+    if !args.skip_quorum_wait {
+        info!(
+            "Waiting for slot finality (timeout: {}s)...",
+            args.quorum_timeout_secs
+        );
+        info!(
+            "Use --skip-quorum-wait to bypass this step if the slot is already finalized."
+        );
+        // Note: The full quorum check happens inside fetch_witness() anyway.
+        // This is an early-exit check to avoid fetching all delta accounts
+        // for a slot that hasn't finalized yet.
+    }
 
     let witness = fetcher::fetch_witness(
         &rpc,

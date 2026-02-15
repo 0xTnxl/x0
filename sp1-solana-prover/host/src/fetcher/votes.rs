@@ -20,6 +20,7 @@
 //!
 //! The bank hash is always a 32-byte field within the vote instruction data.
 
+use std::collections::HashSet;
 use solana_sdk::pubkey::Pubkey;
 use solana_transaction_status::{
     EncodedTransactionWithStatusMeta, UiConfirmedBlock,
@@ -60,6 +61,7 @@ pub fn extract_votes_for_bank_hash(
     target_bank_hash: &[u8; 32],
 ) -> Vec<ParsedVoteTransaction> {
     let mut votes = Vec::new();
+    let mut seen_authorities: HashSet<[u8; 32]> = HashSet::new();
 
     let Some(ref transactions) = block.transactions else {
         warn!("Block has no transactions");
@@ -68,7 +70,17 @@ pub fn extract_votes_for_bank_hash(
 
     for tx_with_meta in transactions {
         if let Some(parsed) = try_parse_vote_transaction(tx_with_meta, target_bank_hash) {
-            votes.push(parsed);
+            // Deduplicate by vote authority — only keep the first vote per authority.
+            // A validator should only vote once per bank hash, but duplicate
+            // transactions can appear due to retransmission.
+            if seen_authorities.insert(parsed.vote_authority) {
+                votes.push(parsed);
+            } else {
+                trace!(
+                    "Duplicate vote from authority 0x{} — skipping",
+                    hex::encode(&parsed.vote_authority[..8])
+                );
+            }
         }
     }
 

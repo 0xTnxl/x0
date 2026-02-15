@@ -69,11 +69,13 @@ pub async fn fetch_witness(
         .context("Failed to find creation slot for BridgeOutMessage")?;
     info!("BridgeOutMessage created at slot {}", slot);
 
-    // Warn about epoch boundaries — bank hash has extra mixing
-    if is_likely_epoch_boundary(rpc, slot)? {
-        warn!(
-            "Slot {} is near an epoch boundary. Bank hash may include \
-             epoch_accounts_hash. Consider using a different slot.",
+    // Hard-reject epoch boundary slots — bank hash includes extra
+    // epoch_accounts_hash that the circuit doesn't account for
+    if rpc::is_epoch_boundary_slot(rpc, slot)? {
+        anyhow::bail!(
+            "Slot {} is at an epoch boundary. The bank hash formula includes \
+             epoch_accounts_hash which is not supported by the circuit. \
+             Please use a slot away from epoch boundaries.",
             slot
         );
     }
@@ -199,16 +201,10 @@ pub async fn fetch_witness(
         .context("Failed to parse blockhash")?
         .to_bytes();
 
-    // Count signatures in the block
-    let signature_count: u64 = block
-        .transactions
-        .as_ref()
-        .map_or(0, |txs| {
-            txs.iter()
-                .filter_map(|tx| tx.meta.as_ref())
-                .filter(|meta| meta.err.is_none())
-                .count() as u64
-        });
+    // Count actual Ed25519 signatures in the block.
+    // Solana's Bank.signature_count is the SUM of num_required_signatures
+    // across ALL transactions (not just the transaction count).
+    let signature_count: u64 = rpc::count_block_signatures(&block);
 
     info!(
         "Block info: blockhash=0x{}, sig_count={}",
@@ -297,11 +293,19 @@ pub async fn fetch_witness(
 
     info!("[6/6] Assembling witness...");
 
-    // Bank hash components — for the circuit to re-derive
-    // NOTE: parent_bank_hash is a placeholder when using standard RPC.
-    // The circuit will verify via vote quorum instead.
+    // Fetch parent bank hash (bank hash of slot S-1).
+    // SHA-256 preimage resistance guarantees authenticity: if bank_hash(S)
+    // is quorum-verified, its preimage (including parent) must be correct.
+    let parent_bank_hash = find_bank_hash_for_slot(rpc, slot.saturating_sub(1), &vote_accounts)
+        .context("Failed to find parent bank hash for slot S-1")?;
+    info!(
+        "Parent bank hash (slot {}): 0x{}",
+        slot.saturating_sub(1),
+        hex::encode(&parent_bank_hash[..8])
+    );
+
     let bank_hash_components = BankHashComponents {
-        parent_bank_hash: [0u8; 32], // Placeholder — see note above
+        parent_bank_hash,
         signature_count,
         last_blockhash,
     };
@@ -334,31 +338,6 @@ pub async fn fetch_witness(
     );
 
     Ok(witness)
-}
-
-/// Check if a slot is near an epoch boundary
-///
-/// Epoch boundaries involve extra `epoch_accounts_hash` mixing in the bank hash
-/// computation. We avoid these slots for simplicity.
-fn is_likely_epoch_boundary(rpc: &RpcClient, slot: Slot) -> Result<bool> {
-    let epoch_info = rpc
-        .get_epoch_info()
-        .context("Failed to get epoch info")?;
-
-    let slots_per_epoch = epoch_info.slots_in_epoch;
-    let slot_in_epoch = slot % slots_per_epoch;
-
-    // Consider the first and last 10 slots of each epoch as boundary
-    let at_boundary = slot_in_epoch < 10 || slot_in_epoch >= slots_per_epoch - 10;
-
-    if at_boundary {
-        warn!(
-            "Slot {} is at position {} in epoch (length {}) — near boundary",
-            slot, slot_in_epoch, slots_per_epoch
-        );
-    }
-
-    Ok(at_boundary)
 }
 
 /// Find the bank hash for a specific slot
