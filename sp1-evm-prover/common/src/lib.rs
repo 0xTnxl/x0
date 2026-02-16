@@ -117,6 +117,23 @@ pub struct EVMProofWitness {
     /// (keccak256 hash chain) so the Solana verifier only needs to check
     /// that `chain_proof.headers[0]` matches a known-good anchor.
     pub chain_proof: ChainProof,
+
+    /// Contract addresses to include in event log extraction.
+    ///
+    /// If non-empty, only logs emitted by these contracts are extracted.
+    /// If empty, ALL logs from the receipt are included (legacy behavior).
+    ///
+    /// For the x0 bridge, this should contain the X0LockContract address.
+    pub relevant_contracts: Vec<[u8; 20]>,
+
+    /// Event topic signatures to include in event log extraction.
+    ///
+    /// If non-empty, only logs whose `topics[0]` (event signature) matches
+    /// one of these values are extracted.
+    /// If empty, ALL logs pass the topic filter (legacy behavior).
+    ///
+    /// For the x0 bridge, this should contain `LOCKED_EVENT_SIGNATURE`.
+    pub relevant_topics: Vec<[u8; 32]>,
 }
 
 // ============================================================================
@@ -273,6 +290,13 @@ pub const MAX_TRANSACTION_RLP_SIZE: usize = 131_072;
 /// Receipts with many log entries can be large but rarely exceed 128 KB.
 pub const MAX_RECEIPT_RLP_SIZE: usize = 131_072;
 
+/// Maximum number of contract addresses or topic filters in the witness.
+///
+/// Bounds the loop iteration inside the circuit to prevent cycle bloat.
+/// In practice, the x0 bridge only needs 1-2 contract addresses and
+/// 1-2 topic signatures (Locked, Transfer).
+pub const MAX_RELEVANT_FILTERS: usize = 16;
+
 impl EVMProofWitness {
     /// Validate witness structure before proof generation.
     ///
@@ -286,6 +310,7 @@ impl EVMProofWitness {
     /// - Receipt RLP is non-empty and within size bounds
     /// - MPT proof depths are within bounds
     /// - Block number is non-zero
+    /// - Relevant contract/topic filters within bounds
     pub fn validate(&self) -> Result<(), String> {
         if self.block_hash == [0u8; 32] {
             return Err("Block hash must not be zero".into());
@@ -348,6 +373,22 @@ impl EVMProofWitness {
 
         if self.block_number == 0 {
             return Err("Block number must not be zero".into());
+        }
+
+        // Relevant filter bounds
+        if self.relevant_contracts.len() > MAX_RELEVANT_FILTERS {
+            return Err(format!(
+                "Too many relevant contracts: {} (max {})",
+                self.relevant_contracts.len(),
+                MAX_RELEVANT_FILTERS,
+            ));
+        }
+        if self.relevant_topics.len() > MAX_RELEVANT_FILTERS {
+            return Err(format!(
+                "Too many relevant topics: {} (max {})",
+                self.relevant_topics.len(),
+                MAX_RELEVANT_FILTERS,
+            ));
         }
 
         // Chain proof validation
@@ -519,6 +560,8 @@ mod tests {
             to: [3u8; 20],
             value: 1000,
             chain_proof: chain,
+            relevant_contracts: vec![],
+            relevant_topics: vec![],
         }
     }
 
@@ -601,6 +644,157 @@ mod tests {
         assert_eq!(restored.chain_anchor_block, 500);
         assert_eq!(restored.chain_anchor_hash, [5u8; 32]);
         assert_eq!(restored.block_number, 999);
+    }
+
+    // -- Witness validation: new fields --
+
+    #[test]
+    fn witness_validates_with_contract_filters() {
+        let chain = make_chain(100, 3);
+        let mut witness = make_minimal_witness(chain);
+        witness.relevant_contracts = vec![[0xAAu8; 20], [0xBBu8; 20]];
+        witness.relevant_topics = vec![[0xCCu8; 32]];
+        assert!(witness.validate().is_ok());
+    }
+
+    #[test]
+    fn witness_rejects_too_many_contracts() {
+        let chain = make_chain(100, 3);
+        let mut witness = make_minimal_witness(chain);
+        witness.relevant_contracts = (0..=MAX_RELEVANT_FILTERS as u8)
+            .map(|i| [i; 20])
+            .collect();
+        let err = witness.validate().unwrap_err();
+        assert!(err.contains("Too many relevant contracts"));
+    }
+
+    #[test]
+    fn witness_rejects_too_many_topics() {
+        let chain = make_chain(100, 3);
+        let mut witness = make_minimal_witness(chain);
+        witness.relevant_topics = (0..=MAX_RELEVANT_FILTERS as u8)
+            .map(|i| [i; 32])
+            .collect();
+        let err = witness.validate().unwrap_err();
+        assert!(err.contains("Too many relevant topics"));
+    }
+
+    #[test]
+    fn witness_rejects_zero_block_hash() {
+        let chain = make_chain(100, 3);
+        let mut witness = make_minimal_witness(chain);
+        witness.block_hash = [0u8; 32];
+        let err = witness.validate().unwrap_err();
+        assert!(err.contains("Block hash must not be zero"));
+    }
+
+    #[test]
+    fn witness_rejects_empty_block_header_rlp() {
+        let chain = make_chain(100, 3);
+        let mut witness = make_minimal_witness(chain);
+        witness.block_header_rlp = vec![];
+        let err = witness.validate().unwrap_err();
+        assert!(err.contains("Block header RLP must not be empty"));
+    }
+
+    #[test]
+    fn witness_rejects_oversized_block_header_rlp() {
+        let chain = make_chain(100, 3);
+        let mut witness = make_minimal_witness(chain);
+        witness.block_header_rlp = vec![0xf8; MAX_BLOCK_HEADER_RLP_SIZE + 1];
+        let err = witness.validate().unwrap_err();
+        assert!(err.contains("Block header RLP too large"));
+    }
+
+    #[test]
+    fn witness_rejects_empty_transaction_rlp() {
+        let chain = make_chain(100, 3);
+        let mut witness = make_minimal_witness(chain);
+        witness.transaction_rlp = vec![];
+        let err = witness.validate().unwrap_err();
+        assert!(err.contains("Transaction RLP must not be empty"));
+    }
+
+    #[test]
+    fn witness_rejects_empty_receipt_rlp() {
+        let chain = make_chain(100, 3);
+        let mut witness = make_minimal_witness(chain);
+        witness.receipt_rlp = vec![];
+        let err = witness.validate().unwrap_err();
+        assert!(err.contains("Receipt RLP must not be empty"));
+    }
+
+    #[test]
+    fn witness_rejects_empty_tx_proof() {
+        let chain = make_chain(100, 3);
+        let mut witness = make_minimal_witness(chain);
+        witness.tx_proof_nodes = vec![];
+        let err = witness.validate().unwrap_err();
+        assert!(err.contains("Transaction MPT proof must have at least one node"));
+    }
+
+    #[test]
+    fn witness_rejects_empty_receipt_proof() {
+        let chain = make_chain(100, 3);
+        let mut witness = make_minimal_witness(chain);
+        witness.receipt_proof_nodes = vec![];
+        let err = witness.validate().unwrap_err();
+        assert!(err.contains("Receipt MPT proof must have at least one node"));
+    }
+
+    #[test]
+    fn witness_rejects_zero_block_number() {
+        let mut chain = make_chain(0, 3);
+        // Fix sequential numbers to include 0
+        chain.headers[0].number = 0;
+        chain.headers[1].number = 1;
+        chain.headers[2].number = 2;
+        let mut witness = make_minimal_witness(make_chain(100, 3));
+        witness.block_number = 0;
+        let err = witness.validate().unwrap_err();
+        assert!(err.contains("Block number must not be zero"));
+    }
+
+    #[test]
+    fn witness_rejects_deep_tx_proof() {
+        let chain = make_chain(100, 3);
+        let mut witness = make_minimal_witness(chain);
+        witness.tx_proof_nodes = (0..=MAX_MPT_PROOF_DEPTH)
+            .map(|_| vec![0xf8; 10])
+            .collect();
+        let err = witness.validate().unwrap_err();
+        assert!(err.contains("Transaction MPT proof too deep"));
+    }
+
+    // -- Witness serde roundtrip with new fields --
+
+    #[test]
+    fn witness_serde_roundtrip_with_filters() {
+        let chain = make_chain(100, 3);
+        let mut witness = make_minimal_witness(chain);
+        witness.relevant_contracts = vec![[0xAAu8; 20]];
+        witness.relevant_topics = vec![[0xBBu8; 32], [0xCCu8; 32]];
+
+        let json = serde_json::to_string(&witness).unwrap();
+        let restored: EVMProofWitness = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.relevant_contracts.len(), 1);
+        assert_eq!(restored.relevant_contracts[0], [0xAAu8; 20]);
+        assert_eq!(restored.relevant_topics.len(), 2);
+        assert_eq!(restored.relevant_topics[0], [0xBBu8; 32]);
+    }
+
+    // -- Constants sanity checks --
+
+    #[test]
+    fn constants_are_sane() {
+        assert!(MAX_MPT_PROOF_DEPTH >= 10);
+        assert!(MAX_MPT_PROOF_DEPTH <= 64);
+        assert!(MAX_BLOCK_HEADER_RLP_SIZE >= 1024);
+        assert!(MAX_CHAIN_PROOF_DEPTH >= 64);
+        assert!(MAX_CHAIN_PROOF_DEPTH <= 1024);
+        assert!(MAX_TRANSACTION_RLP_SIZE >= 1024);
+        assert!(MAX_RECEIPT_RLP_SIZE >= 1024);
+        assert!(MAX_RELEVANT_FILTERS >= 4);
     }
 }
 

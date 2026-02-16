@@ -262,10 +262,14 @@ pub fn main() {
     assert_eq!(status, 1, "Transaction receipt status is not success");
 
     // ========================================================================
-    // Step 7: Extract event logs
+    // Step 7: Extract event logs (with optional filtering)
     // ========================================================================
 
-    let event_logs = extract_event_logs(&logs_rlp);
+    let event_logs = extract_event_logs(
+        &logs_rlp,
+        &witness.relevant_contracts,
+        &witness.relevant_topics,
+    );
 
     // ========================================================================
     // Step 8: Commit public outputs
@@ -398,9 +402,15 @@ fn extract_bytes32(data: &[u8]) -> [u8; 32] {
 }
 
 /// RLP-encode a u32 (for transaction index key)
+///
+/// Per the Ethereum Yellow Paper, the trie key for transaction/receipt
+/// at index `i` is `RLP(i)`. For index 0, this is `0x80` (RLP empty
+/// string), which is correct — verified against go-ethereum's behavior.
 fn rlp_encode_u32(value: u32) -> Vec<u8> {
     if value == 0 {
-        return vec![0x80]; // RLP empty string
+        // RLP(0) = 0x80 — the empty byte string.
+        // This matches how Ethereum encodes tx index 0 in the trie.
+        return vec![0x80];
     }
     let bytes = value.to_be_bytes();
     let start = bytes.iter().position(|&b| b != 0).unwrap_or(3);
@@ -465,18 +475,27 @@ fn verify_mpt_proof(
                     let nibble = key_nibbles[key_pos] as usize;
                     let child = items[nibble];
 
-                    // Verify next node hash
+                    // Verify next node matches this child reference
                     if i + 1 < proof_nodes.len() {
-                        let child_hash = if child.len() < 32 {
-                            // Inline node
-                            keccak256(child)
-                        } else {
+                        if child.len() == 32 {
+                            // External node: child is the keccak256 hash
                             let mut h = [0u8; 32];
                             h.copy_from_slice(child);
-                            h
-                        };
-                        let next_hash = keccak256(&proof_nodes[i + 1]);
-                        if child_hash != next_hash {
+                            let next_hash = keccak256(&proof_nodes[i + 1]);
+                            if h != next_hash {
+                                return false;
+                            }
+                        } else if !child.is_empty() {
+                            // Inline node: child content is embedded directly
+                            // in the parent node's RLP. The parent's hash
+                            // already covers this data. Verify that the next
+                            // proof node decodes to matching content.
+                            let (decoded_next, _) = decode_rlp_item(&proof_nodes[i + 1]);
+                            if decoded_next != child {
+                                return false;
+                            }
+                        } else {
+                            // Empty child slot — shouldn't be following this path
                             return false;
                         }
                     }
@@ -502,18 +521,23 @@ fn verify_mpt_proof(
                     // Leaf node: value should match
                     return items[1] == value;
                 } else if !is_leaf && !is_last {
-                    // Extension node: verify next node hash
+                    // Extension node: verify next node reference
                     if i + 1 < proof_nodes.len() {
-                        let child_hash = if items[1].len() == 32 {
+                        if items[1].len() == 32 {
+                            // External node: child reference is a keccak256 hash
                             let mut h = [0u8; 32];
                             h.copy_from_slice(items[1]);
-                            h
-                        } else {
-                            keccak256(items[1])
-                        };
-                        let next_hash = keccak256(&proof_nodes[i + 1]);
-                        if child_hash != next_hash {
-                            return false;
+                            let next_hash = keccak256(&proof_nodes[i + 1]);
+                            if h != next_hash {
+                                return false;
+                            }
+                        } else if !items[1].is_empty() {
+                            // Inline node: child content is embedded directly.
+                            // Verify next proof node decodes to matching content.
+                            let (decoded_next, _) = decode_rlp_item(&proof_nodes[i + 1]);
+                            if decoded_next != items[1] {
+                                return false;
+                            }
                         }
                     }
                 }
@@ -592,15 +616,35 @@ fn parse_receipt(receipt_rlp: &[u8]) -> (u8, Vec<u8>) {
     } else if items[0].is_empty() {
         0
     } else {
-        // Pre-Byzantium: state root (32 bytes) = success
-        1
+        // Pre-Byzantium receipts have a 32-byte state root instead of a
+        // 1-byte status code. Base launched post-Byzantium (2021), so
+        // pre-Byzantium receipts should NEVER appear on Base.
+        //
+        // If we encounter one, the receipt is either:
+        // 1. Malformed/forged (attack)
+        // 2. Targeting the wrong chain
+        //
+        // Reject unconditionally rather than guessing success.
+        panic!(
+            "Pre-Byzantium receipt format detected (state root {} bytes). \
+             Base is a post-Byzantium chain — this receipt is invalid.",
+            items[0].len()
+        )
     };
 
     (status, items[3].to_vec())
 }
 
-/// Extract event logs from the RLP-encoded logs list
-fn extract_event_logs(logs_rlp: &[u8]) -> Vec<EventLog> {
+/// Extract event logs from the RLP-encoded logs list, filtered by
+/// contract address and event topic signature.
+///
+/// If `relevant_contracts` is empty, all contracts pass.
+/// If `relevant_topics` is empty, all topics pass.
+fn extract_event_logs(
+    logs_rlp: &[u8],
+    relevant_contracts: &[[u8; 20]],
+    relevant_topics: &[[u8; 32]],
+) -> Vec<EventLog> {
     let log_items = rlp_decode_list(logs_rlp);
     let mut events = Vec::new();
 
@@ -616,11 +660,25 @@ fn extract_event_logs(logs_rlp: &[u8]) -> Vec<EventLog> {
             contract_address.copy_from_slice(&log_fields[0][..20]);
         }
 
+        // Filter by contract address
+        if !relevant_contracts.is_empty()
+            && !relevant_contracts.contains(&contract_address)
+        {
+            continue;
+        }
+
         let topic_items = rlp_decode_list(log_fields[1]);
         let topics: Vec<[u8; 32]> = topic_items
             .iter()
             .map(|t| extract_bytes32(t))
             .collect();
+
+        // Filter by event topic signature (topics[0])
+        if !relevant_topics.is_empty()
+            && (topics.is_empty() || !relevant_topics.contains(&topics[0]))
+        {
+            continue;
+        }
 
         events.push(EventLog {
             contract_address,

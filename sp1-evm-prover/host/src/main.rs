@@ -28,6 +28,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
+use x0_sp1_evm_common::{LOCKED_EVENT_SIGNATURE, TRANSFER_EVENT_SIGNATURE};
 
 #[derive(Parser)]
 #[command(name = "x0-sp1-host")]
@@ -66,6 +67,15 @@ enum Commands {
         #[arg(long, env = "ANCHOR_HASH")]
         anchor_hash: String,
 
+        /// X0LockContract address to filter event logs (hex, 0x-prefixed)
+        /// If not set, all contract logs are included.
+        #[arg(long, env = "LOCK_CONTRACT")]
+        lock_contract: Option<String>,
+
+        /// Include Transfer events in addition to Locked events
+        #[arg(long, default_value = "false")]
+        include_transfer_events: bool,
+
         /// Use mock prover (for testing, does NOT generate a real proof)
         #[arg(long, default_value = "false")]
         mock: bool,
@@ -103,6 +113,8 @@ async fn main() -> Result<()> {
             public_inputs_output,
             anchor_block,
             anchor_hash,
+            lock_contract,
+            include_transfer_events,
             mock,
         } => {
             tracing::info!("Starting proof generation for tx: {}", tx_hash);
@@ -125,10 +137,38 @@ async fn main() -> Result<()> {
                 hex::encode(anchor_hash_arr),
             );
 
+            // Parse event log filters
+            let relevant_contracts: Vec<[u8; 20]> = if let Some(ref addr) = lock_contract {
+                let addr_str = addr.strip_prefix("0x").unwrap_or(addr);
+                let addr_bytes = hex::decode(addr_str)
+                    .context("Invalid lock contract address hex")?;
+                anyhow::ensure!(
+                    addr_bytes.len() == 20,
+                    "Lock contract address must be 20 bytes, got {}",
+                    addr_bytes.len()
+                );
+                let mut addr_arr = [0u8; 20];
+                addr_arr.copy_from_slice(&addr_bytes);
+                tracing::info!("Filtering logs by contract: 0x{}", hex::encode(addr_arr));
+                vec![addr_arr]
+            } else {
+                vec![] // no filter = include all contracts
+            };
+
+            let mut relevant_topics: Vec<[u8; 32]> = vec![LOCKED_EVENT_SIGNATURE];
+            if include_transfer_events {
+                relevant_topics.push(TRANSFER_EVENT_SIGNATURE);
+            }
+            tracing::info!(
+                "Filtering logs by {} event signature(s)",
+                relevant_topics.len(),
+            );
+
             // Step 1: Fetch EVM artifacts (including chain proof)
             tracing::info!("Fetching EVM artifacts from {}", rpc_url);
             let witness = artifacts::fetch_evm_artifacts(
                 &rpc_url, &tx_hash, anchor_block, anchor_hash_arr,
+                relevant_contracts, relevant_topics,
             )
                 .await
                 .context("Failed to fetch EVM artifacts")?;

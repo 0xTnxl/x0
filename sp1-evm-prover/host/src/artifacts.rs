@@ -28,11 +28,15 @@ use x0_sp1_evm_common::{
 /// * `tx_hash_hex` - Transaction hash (hex, 0x-prefixed)
 /// * `anchor_block` - Trusted anchor block number
 /// * `anchor_hash` - Expected hash of the anchor block (for local validation)
+/// * `relevant_contracts` - Contract addresses to filter event logs (empty = all)
+/// * `relevant_topics` - Event topic signatures to filter logs (empty = all)
 pub async fn fetch_evm_artifacts(
     rpc_url: &str,
     tx_hash_hex: &str,
     anchor_block: u64,
     anchor_hash: [u8; 32],
+    relevant_contracts: Vec<[u8; 20]>,
+    relevant_topics: Vec<[u8; 32]>,
 ) -> Result<EVMProofWitness> {
     let tx_hash: B256 = tx_hash_hex
         .parse()
@@ -56,6 +60,47 @@ pub async fn fetch_evm_artifacts(
     let tx_index = tx
         .transaction_index
         .ok_or_else(|| anyhow!("Transaction has no index"))?;
+
+    // ====================================================================
+    // Verify block finality
+    //
+    // On Base (OP Stack), blocks are soft-confirmed every 2 seconds but
+    // can be reorganized until they are posted to L1. We require at least
+    // REQUIRED_CONFIRMATIONS blocks (~2 minutes) to mitigate reorg risk.
+    //
+    // For production deployments, consider waiting for L1 finality (~15 min).
+    // ====================================================================
+
+    const REQUIRED_CONFIRMATIONS: u64 = 60; // ~2 minutes on Base (2s blocks)
+
+    let latest_block = provider
+        .get_block_number()
+        .await
+        .context("Failed to fetch latest block number")?;
+
+    let confirmations = latest_block.saturating_sub(block_number);
+
+    if confirmations < REQUIRED_CONFIRMATIONS {
+        bail!(
+            "Block {} needs {} more confirmations (has {}, requires {}). \
+             Wait ~{} seconds before proving.",
+            block_number,
+            REQUIRED_CONFIRMATIONS - confirmations,
+            confirmations,
+            REQUIRED_CONFIRMATIONS,
+            (REQUIRED_CONFIRMATIONS - confirmations) * 2,
+        );
+    }
+
+    tracing::info!(
+        "Block {} has {} confirmations (required: {})",
+        block_number,
+        confirmations,
+        REQUIRED_CONFIRMATIONS,
+    );
+
+    // Validate transaction type before proceeding
+    validate_tx_type(tx.transaction_type)?;
 
     // Fetch full block
     tracing::debug!("Fetching block {}", block_number);
@@ -180,6 +225,8 @@ pub async fn fetch_evm_artifacts(
         to,
         value,
         chain_proof,
+        relevant_contracts,
+        relevant_topics,
     })
 }
 
@@ -586,6 +633,36 @@ fn rlp_encode_access_list(
                 .collect();
             rlp_encode_list(&items)
         }
+    }
+}
+
+/// Validate that the transaction type is one we can correctly prove.
+///
+/// Supported types:
+/// - Type 0 (Legacy)
+/// - Type 1 (EIP-2930: access lists)
+/// - Type 2 (EIP-1559: priority fees)
+/// - Type 0x7E (OP Stack deposit: handled via raw RPC fallback)
+///
+/// Unknown types are rejected because we cannot guarantee correct
+/// RLP encoding or receipt parsing.
+fn validate_tx_type(tx_type: Option<u8>) -> Result<()> {
+    match tx_type {
+        None | Some(0) => Ok(()), // Legacy
+        Some(1) => Ok(()),       // EIP-2930
+        Some(2) => Ok(()),       // EIP-1559
+        Some(0x7E) => {
+            // OP Stack deposit transaction — requires special handling
+            // (fetched via eth_getRawTransactionByHash fallback)
+            tracing::debug!("OP Stack deposit transaction (type 0x7E)");
+            Ok(())
+        }
+        Some(t) => bail!(
+            "Unsupported transaction type: 0x{:02x}. \
+             Only legacy (0), EIP-2930 (1), EIP-1559 (2), and \
+             OP Stack deposit (0x7E) are supported.",
+            t
+        ),
     }
 }
 
