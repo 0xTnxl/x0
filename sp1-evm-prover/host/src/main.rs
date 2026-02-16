@@ -13,6 +13,8 @@
 //! x0-sp1-host prove \
 //!   --rpc-url https://mainnet.base.org \
 //!   --tx-hash 0xabc123... \
+//!   --anchor-block 12345678 \
+//!   --anchor-hash 0xdeadbeef... \
 //!   --output proof.bin
 //! ```
 //!
@@ -56,6 +58,14 @@ enum Commands {
         #[arg(long, default_value = "public_inputs.json")]
         public_inputs_output: PathBuf,
 
+        /// Trusted anchor block number (chain proof starts here)
+        #[arg(long, env = "ANCHOR_BLOCK")]
+        anchor_block: u64,
+
+        /// Trusted anchor block hash (hex, 0x-prefixed, 32 bytes)
+        #[arg(long, env = "ANCHOR_HASH")]
+        anchor_hash: String,
+
         /// Use mock prover (for testing, does NOT generate a real proof)
         #[arg(long, default_value = "false")]
         mock: bool,
@@ -91,13 +101,35 @@ async fn main() -> Result<()> {
             tx_hash,
             output,
             public_inputs_output,
+            anchor_block,
+            anchor_hash,
             mock,
         } => {
             tracing::info!("Starting proof generation for tx: {}", tx_hash);
 
-            // Step 1: Fetch EVM artifacts
+            // Parse anchor hash from hex string
+            let anchor_hash_str = anchor_hash.strip_prefix("0x").unwrap_or(&anchor_hash);
+            let anchor_hash_bytes = hex::decode(anchor_hash_str)
+                .context("Invalid anchor hash hex")?;
+            anyhow::ensure!(
+                anchor_hash_bytes.len() == 32,
+                "Anchor hash must be 32 bytes, got {}",
+                anchor_hash_bytes.len()
+            );
+            let mut anchor_hash_arr = [0u8; 32];
+            anchor_hash_arr.copy_from_slice(&anchor_hash_bytes);
+
+            tracing::info!(
+                "Chain proof anchor: block={}, hash=0x{}",
+                anchor_block,
+                hex::encode(anchor_hash_arr),
+            );
+
+            // Step 1: Fetch EVM artifacts (including chain proof)
             tracing::info!("Fetching EVM artifacts from {}", rpc_url);
-            let witness = artifacts::fetch_evm_artifacts(&rpc_url, &tx_hash)
+            let witness = artifacts::fetch_evm_artifacts(
+                &rpc_url, &tx_hash, anchor_block, anchor_hash_arr,
+            )
                 .await
                 .context("Failed to fetch EVM artifacts")?;
 

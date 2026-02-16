@@ -9,7 +9,9 @@ use alloy_rpc_types::{Block, TransactionReceipt};
 use alloy_consensus::TxType;
 use anyhow::{anyhow, bail, Context, Result};
 use tiny_keccak::{Hasher, Keccak};
-use x0_sp1_evm_common::EVMProofWitness;
+use x0_sp1_evm_common::{
+    EVMProofWitness, ChainProof, BlockHeaderRLP, MAX_CHAIN_PROOF_DEPTH,
+};
 
 /// Fetch all EVM artifacts needed for proof generation
 ///
@@ -18,8 +20,20 @@ use x0_sp1_evm_common::EVMProofWitness;
 /// 2. Fetches the full block (with transactions)
 /// 3. Fetches the transaction receipt
 /// 4. Constructs Merkle-Patricia Trie proofs for tx and receipt
-/// 5. Returns an EVMProofWitness ready for the SP1 guest
-pub async fn fetch_evm_artifacts(rpc_url: &str, tx_hash_hex: &str) -> Result<EVMProofWitness> {
+/// 5. Fetches consecutive block headers from anchor to target block
+/// 6. Returns an EVMProofWitness ready for the SP1 guest
+///
+/// # Arguments
+/// * `rpc_url` - EVM RPC endpoint
+/// * `tx_hash_hex` - Transaction hash (hex, 0x-prefixed)
+/// * `anchor_block` - Trusted anchor block number
+/// * `anchor_hash` - Expected hash of the anchor block (for local validation)
+pub async fn fetch_evm_artifacts(
+    rpc_url: &str,
+    tx_hash_hex: &str,
+    anchor_block: u64,
+    anchor_hash: [u8; 32],
+) -> Result<EVMProofWitness> {
     let tx_hash: B256 = tx_hash_hex
         .parse()
         .context("Invalid transaction hash format")?;
@@ -97,6 +111,62 @@ pub async fn fetch_evm_artifacts(rpc_url: &str, tx_hash_hex: &str) -> Result<EVM
         );
     }
 
+    // ====================================================================
+    // Fetch consecutive block headers: anchor → target
+    // ====================================================================
+
+    let chain_depth = block_number
+        .checked_sub(anchor_block)
+        .ok_or_else(|| anyhow!(
+            "Anchor block {} is after target block {}",
+            anchor_block,
+            block_number,
+        ))?;
+
+    // +1 because we include both anchor and target
+    let chain_len = (chain_depth + 1) as usize;
+
+    if chain_len < 2 {
+        bail!(
+            "Chain proof must span at least 2 blocks. anchor={}, target={}",
+            anchor_block,
+            block_number,
+        );
+    }
+    if chain_len > MAX_CHAIN_PROOF_DEPTH {
+        bail!(
+            "Chain proof too deep: {} blocks (max {}). \
+             Update the anchor to a more recent block.",
+            chain_len,
+            MAX_CHAIN_PROOF_DEPTH,
+        );
+    }
+
+    tracing::info!(
+        "Fetching {} consecutive block headers ({} → {})",
+        chain_len,
+        anchor_block,
+        block_number,
+    );
+
+    let chain_proof = fetch_chain_proof(
+        &provider,
+        rpc_url,
+        anchor_block,
+        block_number,
+        &block,
+    ).await.context("Failed to fetch chain proof headers")?;
+
+    // Local validation: verify the anchor hash matches the expected value
+    let computed_anchor_hash = keccak256(&chain_proof.headers[0].rlp_encoded);
+    if computed_anchor_hash != anchor_hash {
+        bail!(
+            "Anchor block hash mismatch: computed={} expected={}",
+            hex::encode(computed_anchor_hash),
+            hex::encode(anchor_hash),
+        );
+    }
+
     Ok(EVMProofWitness {
         block_header_rlp,
         block_hash: block_hash.0,
@@ -109,7 +179,95 @@ pub async fn fetch_evm_artifacts(rpc_url: &str, tx_hash_hex: &str) -> Result<EVM
         from,
         to,
         value,
+        chain_proof,
     })
+}
+
+/// Fetch consecutive block headers from `anchor_block` to `target_block`
+/// and build a `ChainProof`.
+///
+/// - The target block's header is taken from the already-fetched `target_block_data`
+/// - All intermediate + anchor headers are fetched via `eth_getBlockByNumber`
+/// - Each header is RLP-encoded and its hash is computed for validation
+async fn fetch_chain_proof<P: Provider<T>, T: alloy_transport::Transport + Clone>(
+    provider: &P,
+    _rpc_url: &str,
+    anchor_block: u64,
+    target_block: u64,
+    target_block_data: &Block,
+) -> Result<ChainProof> {
+    let chain_len = (target_block - anchor_block + 1) as usize;
+    let mut headers: Vec<BlockHeaderRLP> = Vec::with_capacity(chain_len);
+
+    // Fetch all blocks from anchor to target-1 (target is already fetched)
+    for block_num in anchor_block..target_block {
+        let block: Block = provider
+            .get_block_by_number(block_num.into(), false)
+            .await
+            .with_context(|| format!("Failed to fetch block {}", block_num))?
+            .ok_or_else(|| anyhow!("Block {} not found", block_num))?;
+
+        let rlp = rlp_encode_block_header(&block)?;
+        let parent_hash = block.header.parent_hash.0;
+        let number = block.header.number;
+
+        // Sanity: verify RLP hashes to the expected block hash
+        let computed = keccak256(&rlp);
+        let expected = block.header.hash.0;
+        if computed != expected {
+            bail!(
+                "Block {} header RLP hash mismatch: computed={} expected={}",
+                block_num,
+                hex::encode(computed),
+                hex::encode(expected),
+            );
+        }
+
+        headers.push(BlockHeaderRLP {
+            rlp_encoded: rlp,
+            number,
+            parent_hash,
+        });
+
+        if block_num % 50 == 0 || block_num == anchor_block {
+            tracing::debug!(
+                "Fetched chain header {}/{} (block {})",
+                headers.len(),
+                chain_len,
+                block_num,
+            );
+        }
+    }
+
+    // Add the target block (already fetched and RLP-encoded by the caller)
+    let target_rlp = rlp_encode_block_header(target_block_data)?;
+    headers.push(BlockHeaderRLP {
+        rlp_encoded: target_rlp,
+        number: target_block_data.header.number,
+        parent_hash: target_block_data.header.parent_hash.0,
+    });
+
+    // Local validation: verify the parent_hash chain
+    for i in 1..headers.len() {
+        let prev_hash = keccak256(&headers[i - 1].rlp_encoded);
+        if prev_hash != headers[i].parent_hash {
+            bail!(
+                "Chain continuity broken at block {}: expected parent={}, got={}",
+                headers[i].number,
+                hex::encode(prev_hash),
+                hex::encode(headers[i].parent_hash),
+            );
+        }
+    }
+
+    tracing::info!(
+        "Chain proof assembled: {} headers (block {} -> {})",
+        headers.len(),
+        anchor_block,
+        target_block,
+    );
+
+    Ok(ChainProof { headers })
 }
 
 /// Construct Merkle-Patricia Trie proofs for the transaction and receipt

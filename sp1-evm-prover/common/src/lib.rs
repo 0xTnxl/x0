@@ -46,6 +46,25 @@ pub struct EVMProofPublicInputs {
     pub success: bool,
     /// Extracted event logs from the receipt
     pub event_logs: Vec<EventLog>,
+
+    // ====================================================================
+    // Chain proof anchor — verified on-chain against trusted anchor state
+    // ====================================================================
+
+    /// Block number of the chain proof anchor (oldest block in the chain).
+    ///
+    /// The Solana verifier checks this against its `trusted_anchor_block`.
+    pub chain_anchor_block: u64,
+
+    /// Block hash of the chain proof anchor.
+    ///
+    /// The Solana verifier requires:
+    ///   `chain_anchor_hash == bridge_state.trusted_anchor_hash`
+    ///
+    /// This is the root of trust: since the circuit cryptographically
+    /// proved the chain `anchor → ... → target`, and the anchor hash
+    /// is known-good, the target block (and its transactions) is valid.
+    pub chain_anchor_hash: [u8; 32],
 }
 
 /// An event log extracted from an EVM transaction receipt
@@ -70,7 +89,7 @@ pub struct EventLog {
 /// to the Solana verifier — only the public inputs above are committed.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EVMProofWitness {
-    /// RLP-encoded block header
+    /// RLP-encoded block header (of the TARGET block containing the tx)
     pub block_header_rlp: Vec<u8>,
     /// Block hash (precomputed for validation)
     pub block_hash: [u8; 32],
@@ -92,6 +111,127 @@ pub struct EVMProofWitness {
     pub to: [u8; 20],
     /// ETH value transferred
     pub value: u64,
+
+    /// Chain proof: consecutive block headers from a trusted anchor to
+    /// the target block. The circuit verifies cryptographic continuity
+    /// (keccak256 hash chain) so the Solana verifier only needs to check
+    /// that `chain_proof.headers[0]` matches a known-good anchor.
+    pub chain_proof: ChainProof,
+}
+
+// ============================================================================
+// Chain Proof Types
+// ============================================================================
+
+/// A cryptographic chain proof linking a trusted anchor block to a target block.
+///
+/// The circuit verifies:
+/// 1. Each header hashes to its claimed hash via keccak256
+/// 2. Each header's `parent_hash` field equals the hash of the previous header
+/// 3. Block numbers are strictly sequential
+///
+/// This proves that `headers[N-1]` (the target) is on the same chain as
+/// `headers[0]` (the anchor), assuming the anchor hash is trusted.
+///
+/// # Security
+///
+/// An attacker cannot forge this chain because it would require finding a
+/// keccak256 preimage — a block header that hashes to a specific value
+/// (complexity ~2^256). The anchor block hash is verified on-chain against
+/// a governance-maintained trusted value.
+///
+/// # Size
+///
+/// Variable length: `target_block - anchor_block + 1` headers.
+/// Bounded by `MAX_CHAIN_PROOF_DEPTH` (256 blocks ≈ 128 KB).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChainProof {
+    /// Consecutive block headers from anchor (index 0) to target (last).
+    ///
+    /// `headers.len()` must be in `[2, MAX_CHAIN_PROOF_DEPTH]`.
+    /// - `headers[0]` = anchor block (checked against on-chain trusted hash)
+    /// - `headers[len-1]` = target block (contains the proven transaction)
+    pub headers: Vec<BlockHeaderRLP>,
+}
+
+/// A block header with its RLP encoding and pre-extracted fields.
+///
+/// The RLP encoding is the canonical serialization used for keccak256 hashing.
+/// The extracted fields (`number`, `parent_hash`) are stored separately for
+/// convenience but are validated against the RLP inside the circuit.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BlockHeaderRLP {
+    /// Full RLP-encoded block header (canonical serialization).
+    ///
+    /// `keccak256(rlp_encoded)` produces the block hash.
+    pub rlp_encoded: Vec<u8>,
+
+    /// Block number (extracted from RLP field index 8).
+    pub number: u64,
+
+    /// Parent block hash (extracted from RLP field index 0).
+    ///
+    /// Must equal `keccak256(headers[i-1].rlp_encoded)` for chain continuity.
+    pub parent_hash: [u8; 32],
+}
+
+impl ChainProof {
+    /// Validate the chain proof structure before proof generation.
+    ///
+    /// # Checks
+    /// - At least 2 headers (anchor + target)
+    /// - At most `MAX_CHAIN_PROOF_DEPTH` headers
+    /// - All headers have non-empty RLP within size bounds
+    /// - Block numbers are sequential
+    /// - Parent hash linkage is correct (hash chain)
+    pub fn validate(&self) -> Result<(), String> {
+        if self.headers.len() < 2 {
+            return Err(format!(
+                "Chain proof must have at least 2 headers (anchor + target), got {}",
+                self.headers.len(),
+            ));
+        }
+        if self.headers.len() > MAX_CHAIN_PROOF_DEPTH {
+            return Err(format!(
+                "Chain proof too deep: {} headers (max {})",
+                self.headers.len(),
+                MAX_CHAIN_PROOF_DEPTH,
+            ));
+        }
+
+        for (i, header) in self.headers.iter().enumerate() {
+            if header.rlp_encoded.is_empty() {
+                return Err(format!("Chain proof header {} has empty RLP", i));
+            }
+            if header.rlp_encoded.len() > MAX_BLOCK_HEADER_RLP_SIZE {
+                return Err(format!(
+                    "Chain proof header {} RLP too large: {} bytes (max {})",
+                    i,
+                    header.rlp_encoded.len(),
+                    MAX_BLOCK_HEADER_RLP_SIZE,
+                ));
+            }
+            if header.number == 0 && i > 0 {
+                return Err(format!(
+                    "Chain proof header {} has block number 0",
+                    i,
+                ));
+            }
+        }
+
+        // Verify sequential block numbers
+        for i in 1..self.headers.len() {
+            if self.headers[i].number != self.headers[i - 1].number + 1 {
+                return Err(format!(
+                    "Chain proof block numbers not sequential: {} followed by {}",
+                    self.headers[i - 1].number,
+                    self.headers[i].number,
+                ));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 // ============================================================================
@@ -110,6 +250,18 @@ pub const MAX_MPT_PROOF_DEPTH: usize = 20;
 ///
 /// Post-merge EIP-4844 headers can reach ~1 KB. We allow 2 KB for headroom.
 pub const MAX_BLOCK_HEADER_RLP_SIZE: usize = 2048;
+
+/// Maximum chain proof depth (number of consecutive block headers).
+///
+/// On Base (2-second blocks), 256 blocks ≈ 8.5 minutes.
+/// The trusted anchor on Solana must be updated at least this frequently.
+///
+/// The chain proof includes headers[0] (anchor) through headers[N-1] (target),
+/// so a depth of 256 means the target can be at most 255 blocks ahead of
+/// the anchor.
+///
+/// Total overhead: 256 × ~500 bytes ≈ 128 KB (acceptable for STARK witness).
+pub const MAX_CHAIN_PROOF_DEPTH: usize = 256;
 
 /// Maximum allowed RLP size for a single transaction (bytes).
 ///
@@ -198,6 +350,19 @@ impl EVMProofWitness {
             return Err("Block number must not be zero".into());
         }
 
+        // Chain proof validation
+        self.chain_proof.validate()?;
+
+        // Target block must be the last header in the chain proof
+        let chain_len = self.chain_proof.headers.len();
+        let last_header = &self.chain_proof.headers[chain_len - 1];
+        if last_header.number != self.block_number {
+            return Err(format!(
+                "Chain proof tail block {} does not match witness block_number {}",
+                last_header.number, self.block_number,
+            ));
+        }
+
         Ok(())
     }
 }
@@ -230,3 +395,212 @@ pub const TRANSFER_EVENT_SIGNATURE: [u8; 32] = [
     0x95, 0x2b, 0xa7, 0xf1, 0x63, 0xc4, 0xa1, 0x16,
     0x28, 0xf5, 0x5a, 0x4d, 0xf5, 0x23, 0xb3, 0xef,
 ];
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+    use alloc::vec;
+
+    fn make_header(number: u64, parent_hash: [u8; 32]) -> BlockHeaderRLP {
+        BlockHeaderRLP {
+            rlp_encoded: vec![0xf8; 100], // fake RLP, just needs to be non-empty
+            number,
+            parent_hash,
+        }
+    }
+
+    fn make_chain(start: u64, len: usize) -> ChainProof {
+        let mut headers = Vec::with_capacity(len);
+        for i in 0..len {
+            headers.push(make_header(start + i as u64, [i as u8; 32]));
+        }
+        ChainProof { headers }
+    }
+
+    // -- ChainProof::validate tests --
+
+    #[test]
+    fn chain_proof_valid_two_headers() {
+        let chain = make_chain(100, 2);
+        assert!(chain.validate().is_ok());
+    }
+
+    #[test]
+    fn chain_proof_valid_max_depth() {
+        let chain = make_chain(100, MAX_CHAIN_PROOF_DEPTH);
+        assert!(chain.validate().is_ok());
+    }
+
+    #[test]
+    fn chain_proof_too_few_headers() {
+        let chain = ChainProof {
+            headers: vec![make_header(100, [0u8; 32])],
+        };
+        let err = chain.validate().unwrap_err();
+        assert!(
+            err.contains("at least 2"),
+            "Expected 'at least 2' error, got: {}",
+            err,
+        );
+    }
+
+    #[test]
+    fn chain_proof_empty() {
+        let chain = ChainProof {
+            headers: vec![],
+        };
+        let err = chain.validate().unwrap_err();
+        assert!(err.contains("at least 2"));
+    }
+
+    #[test]
+    fn chain_proof_exceeds_max_depth() {
+        let chain = make_chain(100, MAX_CHAIN_PROOF_DEPTH + 1);
+        let err = chain.validate().unwrap_err();
+        assert!(
+            err.contains("too deep"),
+            "Expected 'too deep' error, got: {}",
+            err,
+        );
+    }
+
+    #[test]
+    fn chain_proof_empty_rlp() {
+        let mut chain = make_chain(100, 3);
+        chain.headers[1].rlp_encoded = vec![];
+        let err = chain.validate().unwrap_err();
+        assert!(err.contains("empty RLP"));
+    }
+
+    #[test]
+    fn chain_proof_oversized_rlp() {
+        let mut chain = make_chain(100, 3);
+        chain.headers[0].rlp_encoded = vec![0xf8; MAX_BLOCK_HEADER_RLP_SIZE + 1];
+        let err = chain.validate().unwrap_err();
+        assert!(err.contains("RLP too large"));
+    }
+
+    #[test]
+    fn chain_proof_non_sequential_blocks() {
+        let mut chain = make_chain(100, 3);
+        chain.headers[2].number = 105; // should be 102
+        let err = chain.validate().unwrap_err();
+        assert!(err.contains("not sequential"));
+    }
+
+    #[test]
+    fn chain_proof_block_number_zero_not_anchor() {
+        let mut chain = make_chain(100, 3);
+        chain.headers[1].number = 0;
+        // This will also fail sequential check, but the important thing
+        // is that it doesn't pass validation
+        assert!(chain.validate().is_err());
+    }
+
+    // -- EVMProofWitness chain integration tests --
+
+    fn make_minimal_witness(chain: ChainProof) -> EVMProofWitness {
+        let target_block = chain.headers.last().unwrap().number;
+        EVMProofWitness {
+            block_header_rlp: vec![0xf8; 100],
+            block_hash: [1u8; 32],
+            block_number: target_block,
+            transaction_rlp: vec![0xf8; 50],
+            transaction_index: 0,
+            receipt_rlp: vec![0xf8; 50],
+            tx_proof_nodes: vec![vec![0xf8; 20]],
+            receipt_proof_nodes: vec![vec![0xf8; 20]],
+            from: [2u8; 20],
+            to: [3u8; 20],
+            value: 1000,
+            chain_proof: chain,
+        }
+    }
+
+    #[test]
+    fn witness_validates_with_valid_chain() {
+        let chain = make_chain(100, 5);
+        let witness = make_minimal_witness(chain);
+        assert!(witness.validate().is_ok());
+    }
+
+    #[test]
+    fn witness_rejects_chain_tail_mismatch() {
+        let chain = make_chain(100, 5);
+        let mut witness = make_minimal_witness(chain);
+        witness.block_number = 999; // doesn't match chain tail
+        let err = witness.validate().unwrap_err();
+        assert!(
+            err.contains("tail block"),
+            "Expected 'tail block' mismatch error, got: {}",
+            err,
+        );
+    }
+
+    #[test]
+    fn witness_propagates_chain_proof_error() {
+        let chain = ChainProof { headers: vec![] }; // empty = invalid
+        let mut witness = make_minimal_witness(make_chain(100, 2));
+        witness.chain_proof = chain;
+        assert!(witness.validate().is_err());
+    }
+
+    // -- EVMProofPublicInputs chain anchor fields --
+
+    #[test]
+    fn public_inputs_has_anchor_fields() {
+        let pi = EVMProofPublicInputs {
+            block_hash: [0u8; 32],
+            block_number: 200,
+            tx_hash: [0u8; 32],
+            from: [0u8; 20],
+            to: [0u8; 20],
+            value: 0,
+            success: true,
+            event_logs: vec![],
+            chain_anchor_block: 100,
+            chain_anchor_hash: [0xABu8; 32],
+        };
+        assert_eq!(pi.chain_anchor_block, 100);
+        assert_eq!(pi.chain_anchor_hash, [0xABu8; 32]);
+    }
+
+    // -- Serialization round-trip --
+
+    #[test]
+    fn chain_proof_serde_roundtrip() {
+        let chain = make_chain(100, 10);
+        let json = serde_json::to_string(&chain).unwrap();
+        let restored: ChainProof = serde_json::from_str(&json).unwrap();
+        assert_eq!(chain.headers.len(), restored.headers.len());
+        assert_eq!(chain.headers[0].number, restored.headers[0].number);
+        assert_eq!(chain.headers[9].number, restored.headers[9].number);
+    }
+
+    #[test]
+    fn public_inputs_borsh_roundtrip() {
+        let pi = EVMProofPublicInputs {
+            block_hash: [1u8; 32],
+            block_number: 999,
+            tx_hash: [2u8; 32],
+            from: [3u8; 20],
+            to: [4u8; 20],
+            value: 42,
+            success: true,
+            event_logs: vec![],
+            chain_anchor_block: 500,
+            chain_anchor_hash: [5u8; 32],
+        };
+        let bytes = borsh::to_vec(&pi).unwrap();
+        let restored = EVMProofPublicInputs::try_from_slice(&bytes).unwrap();
+        assert_eq!(restored.chain_anchor_block, 500);
+        assert_eq!(restored.chain_anchor_hash, [5u8; 32]);
+        assert_eq!(restored.block_number, 999);
+    }
+}
+

@@ -10,3 +10,6 @@ description = "Shared types between SP1 guest and host for x0 EVM (Base) inbound
 [dependencies]
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
 borsh = { version = "0.10", default-features = false }
+
+[dev-dependencies]
+serde_json = "1.0"
