@@ -169,15 +169,13 @@ async fn main() -> Result<()> {
     // reached ≥ 2/3 stake confirmation yet.
     if !args.skip_quorum_wait {
         info!(
-            "Waiting for slot finality (timeout: {}s)...",
+            "Quorum enforcement enabled (timeout: {}s). \
+             Use --skip-quorum-wait to bypass.",
             args.quorum_timeout_secs
         );
-        info!(
-            "Use --skip-quorum-wait to bypass this step if the slot is already finalized."
-        );
-        // Note: The full quorum check happens inside fetch_witness() anyway.
-        // This is an early-exit check to avoid fetching all delta accounts
-        // for a slot that hasn't finalized yet.
+    } else {
+        info!("Quorum enforcement disabled (--skip-quorum-wait). \
+               Proceeding with whatever votes are available.");
     }
 
     let witness = fetcher::fetch_witness(
@@ -185,6 +183,7 @@ async fn main() -> Result<()> {
         &bridge_program,
         &pda,
         &account,
+        !args.skip_quorum_wait,
     )
     .await
     .context("Failed to fetch witness data")?;

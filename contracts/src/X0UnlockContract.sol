@@ -78,6 +78,11 @@ contract X0UnlockContract is Ownable, Pausable, ReentrancyGuard {
     /// @notice Emitted when circuit breaker is triggered
     event CircuitBreakerTriggered(uint256 totalUnlocked, uint256 threshold);
 
+    /// @notice Emitted when a validator set hash is added or removed
+    /// @param validatorSetHash The hash that was updated
+    /// @param valid Whether the hash is now valid (true) or revoked (false)
+    event ValidatorSetHashUpdated(bytes32 indexed validatorSetHash, bool valid);
+
     // ========================================================================
     // Errors
     // ========================================================================
@@ -92,6 +97,7 @@ contract X0UnlockContract is Ownable, Pausable, ReentrancyGuard {
     error ProofVerificationFailed();
     error InvalidPublicValues();
     error InvalidProgramVKey();
+    error InvalidValidatorSetHash();
 
     // ========================================================================
     // Immutables
@@ -146,6 +152,13 @@ contract X0UnlockContract is Ownable, Pausable, ReentrancyGuard {
     /// @dev nonce => true if already processed
     mapping(uint256 => bool) public processedNonces;
 
+    /// @notice Known-valid validator set hashes (governance-maintained)
+    /// @dev Each Solana epoch has a deterministic validator set hash computed
+    ///      by the SP1 circuit as SHA-256 of sorted (vote_authority, identity, stake)
+    ///      triples. Admin adds the hash at the start of each epoch (~2 days)
+    ///      and can maintain multiple valid hashes for epoch transitions.
+    mapping(bytes32 => bool) public validValidatorSetHashes;
+
     // ========================================================================
     // Constructor
     // ========================================================================
@@ -187,14 +200,17 @@ contract X0UnlockContract is Ownable, Pausable, ReentrancyGuard {
     /// @notice Release USDC to an EVM recipient after verifying an SP1 STARK proof
     ///         that a BridgeOutMessage PDA exists on Solana with the specified burn details.
     ///
-    /// @dev Public values layout (ABI-encoded from SP1 Solana prover):
-    ///   - bridgeProgramId: bytes32   — Solana x0-bridge program ID
-    ///   - nonce:           uint64    — Outbound bridge nonce
-    ///   - solanaSender:    bytes32   — Solana address that burned x0-USD
-    ///   - evmRecipient:    address   — Base address to receive USDC (20 bytes)
-    ///   - amount:          uint64    — Amount in USDC micro-units (6 decimals)
-    ///   - burnTimestamp:   int64     — Unix timestamp of the burn on Solana
-    ///   - accountHash:     bytes32   — SHA256 hash of the BridgeOutMessage account data
+    /// @dev Public values layout (ABI-encoded from SP1 Solana prover, 10 slots):
+    ///   - bridgeProgramId:    bytes32  — Solana x0-bridge program ID
+    ///   - nonce:              uint64   — Outbound bridge nonce
+    ///   - solanaSender:       bytes32  — Solana address that burned x0-USD
+    ///   - evmRecipient:       address  — Base address to receive USDC (20 bytes)
+    ///   - amount:             uint64   — Amount in USDC micro-units (6 decimals)
+    ///   - burnTimestamp:      int64    — Unix timestamp of the burn on Solana
+    ///   - accountHash:        bytes32  — SHA256 hash of the BridgeOutMessage account data
+    ///   - validatorSetHash:   bytes32  — Commitment to the Solana validator set
+    ///   - slot:               uint64   — Solana slot at which the proof was generated
+    ///   - totalEpochStake:    uint64   — Total activated epoch stake (lamports)
     ///
     /// @param proofBytes The SP1 STARK proof bytes
     /// @param publicValues The ABI-encoded public values from the proof
@@ -203,7 +219,7 @@ contract X0UnlockContract is Ownable, Pausable, ReentrancyGuard {
         bytes calldata publicValues
     ) external whenNotPaused nonReentrant {
         // ====================================================================
-        // Step 1: Decode public values
+        // Step 1: Decode public values (all 10 ABI slots)
         // ====================================================================
 
         (
@@ -213,10 +229,13 @@ contract X0UnlockContract is Ownable, Pausable, ReentrancyGuard {
             address proofEvmRecipient,
             uint64 proofAmount,
             /* int64 proofBurnTimestamp */,
-            /* bytes32 proofAccountHash */
+            /* bytes32 proofAccountHash */,
+            bytes32 proofValidatorSetHash,
+            /* uint64 proofSlot */,
+            /* uint64 proofTotalEpochStake */
         ) = abi.decode(
             publicValues,
-            (bytes32, uint64, bytes32, address, uint64, int64, bytes32)
+            (bytes32, uint64, bytes32, address, uint64, int64, bytes32, bytes32, uint64, uint64)
         );
 
         // ====================================================================
@@ -226,6 +245,14 @@ contract X0UnlockContract is Ownable, Pausable, ReentrancyGuard {
         // Verify the proof is for our bridge program
         if (proofBridgeProgram != solanaBridgeProgram) {
             revert InvalidPublicValues();
+        }
+
+        // Verify the validator set hash is known-valid (governance-maintained)
+        // This prevents a malicious prover from fabricating epoch stakes to
+        // forge a quorum. The hash commits the full (vote_authority, identity,
+        // stake) triple for every validator in the epoch.
+        if (!validValidatorSetHashes[proofValidatorSetHash]) {
+            revert InvalidValidatorSetHash();
         }
 
         // Validate recipient
@@ -352,6 +379,18 @@ contract X0UnlockContract is Ownable, Pausable, ReentrancyGuard {
     function setCircuitBreakerThreshold(uint256 _threshold) external onlyOwner {
         circuitBreakerThreshold = _threshold;
         emit ConfigUpdated("circuitBreakerThreshold");
+    }
+
+    /// @notice Add or remove a validator set hash
+    /// @dev Must be called at each Solana epoch transition (~2 days).
+    ///      Maintain at least the current and previous epoch hashes during
+    ///      transitions. Revoke old hashes after the epoch is fully past.
+    /// @param _validatorSetHash The SHA-256 hash of sorted (authority, identity, stake)
+    /// @param _valid Whether to add (true) or revoke (false) the hash
+    function setValidatorSetHash(bytes32 _validatorSetHash, bool _valid) external onlyOwner {
+        if (_validatorSetHash == bytes32(0)) revert InvalidValidatorSetHash();
+        validValidatorSetHashes[_validatorSetHash] = _valid;
+        emit ValidatorSetHashUpdated(_validatorSetHash, _valid);
     }
 
     /// @notice Withdraw USDC (admin rebalancing)

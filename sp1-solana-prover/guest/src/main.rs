@@ -108,6 +108,16 @@ fn main() {
     // 2b. Verify the account is owned by the bridge program
     let bridge_program_id = witness.account_owner;
 
+    // Defense-in-depth: a zero account owner means the account is invalid
+    // or has been closed. The EVM contract also validates this against
+    // `solanaBridgeProgram`, but we enforce non-zero here to fail fast
+    // inside the circuit rather than relying solely on contract-side checks.
+    assert_ne!(
+        bridge_program_id,
+        [0u8; 32],
+        "Account owner must not be zero — the account may be closed or uninitialized"
+    );
+
     // 2c. Verify the account status is "Burned" (0)
     assert_eq!(
         parsed.status, 0,

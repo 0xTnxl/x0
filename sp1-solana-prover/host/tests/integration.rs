@@ -337,6 +337,7 @@ fn test_end_to_end_witness_assembly() {
             &bridge_program,
             &pda,
             &account,
+            false, // don't require quorum for integration tests
         )
         .await
     });
@@ -622,4 +623,143 @@ fn test_epoch_boundary_detection() {
     let is_boundary_zero = rpc::is_epoch_boundary_slot(&rpc, 0)
         .expect("Failed to check epoch boundary for slot 0");
     assert!(is_boundary_zero, "Slot 0 should be at epoch boundary");
+}
+
+// ============================================================================
+// Mock End-to-End Witness Construction Test (offline)
+// ============================================================================
+
+/// Build a structurally valid witness that passes all `validate()` checks.
+///
+/// This tests the full witness assembly shape without network access or
+/// real proof generation. It exercises:
+/// - Correct account data size (151 bytes)
+/// - Non-zero parent bank hash
+/// - Non-zero bank hash and accounts_delta_hash
+/// - Validator votes (at least one)
+/// - Epoch stakes (non-empty, total > 0)
+/// - Sufficient quorum (>= 2/3 stake)
+/// - Non-zero account owner (bridge program ID)
+#[test]
+fn test_mock_witness_validates_successfully() {
+    let witness = make_valid_witness();
+    let result = witness.validate();
+    assert!(
+        result.is_ok(),
+        "Valid witness should pass validation: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_mock_witness_quorum_is_sufficient() {
+    let witness = make_valid_witness();
+    let confirmed: u64 = witness.validator_votes.iter().map(|v| v.stake).sum();
+    // 2/3 check: confirmed * 3 >= total * 2
+    assert!(
+        confirmed * 3 >= witness.total_epoch_stake * 2,
+        "Mock witness should have sufficient quorum: confirmed={}, total={}",
+        confirmed,
+        witness.total_epoch_stake
+    );
+}
+
+#[test]
+fn test_mock_witness_account_owner_is_nonzero() {
+    let witness = make_valid_witness();
+    assert_ne!(
+        witness.account_owner,
+        [0u8; 32],
+        "Valid witness must have non-zero account owner"
+    );
+}
+
+#[test]
+fn test_witness_validate_rejects_zero_account_owner() {
+    let mut witness = make_valid_witness();
+    witness.account_owner = [0u8; 32];
+    let result = witness.validate();
+    assert!(result.is_err(), "Should reject zero account owner");
+    assert!(
+        result.unwrap_err().contains("Account owner"),
+        "Error should mention account owner"
+    );
+}
+
+#[test]
+fn test_witness_validate_rejects_zero_lamports() {
+    let mut witness = make_valid_witness();
+    witness.account_lamports = 0;
+    let result = witness.validate();
+    assert!(result.is_err(), "Should reject zero lamports");
+}
+
+#[test]
+fn test_witness_validate_rejects_zero_total_stake() {
+    let mut witness = make_valid_witness();
+    witness.total_epoch_stake = 0;
+    let result = witness.validate();
+    assert!(result.is_err(), "Should reject zero total stake");
+}
+
+#[test]
+fn test_witness_validate_rejects_empty_epoch_stakes() {
+    let mut witness = make_valid_witness();
+    witness.epoch_stakes = vec![];
+    let result = witness.validate();
+    assert!(result.is_err(), "Should reject empty epoch stakes");
+}
+
+/// Construct a structurally valid witness for offline testing.
+///
+/// The cryptographic material (signatures, Merkle proofs, bank hash
+/// derivation) is synthetic and would NOT pass circuit verification.
+/// This is intentional — the purpose is to test structural validation,
+/// not cryptographic correctness.
+fn make_valid_witness() -> SolanaProofWitness {
+    use x0_sp1_solana_common::ValidatorVote;
+
+    SolanaProofWitness {
+        account_data: vec![0u8; 151], // DATA_SIZE
+        account_address: [1u8; 32],
+        account_owner: [2u8; 32],     // Non-zero bridge program
+        account_lamports: 1_000_000,
+        account_executable: false,
+        account_rent_epoch: 0,
+        inclusion_proof: AccountInclusionProof {
+            levels: vec![],
+            total_delta_accounts: 1,
+        },
+        accounts_delta_hash: [3u8; 32],
+        bank_hash: [4u8; 32],
+        bank_hash_components: BankHashComponents {
+            parent_bank_hash: [5u8; 32], // Non-zero
+            signature_count: 100,
+            last_blockhash: [6u8; 32],
+        },
+        validator_votes: vec![
+            ValidatorVote {
+                vote_authority: [10u8; 32],
+                message_bytes: vec![0u8; 64],
+                signature: [0u8; 64],
+                bank_hash_offset: 0,
+                validator_identity: [11u8; 32],
+                stake: 700_000_000_000, // 70% — sufficient for quorum
+            },
+        ],
+        epoch_stakes: vec![
+            ValidatorSetEntry {
+                vote_authority: [10u8; 32],
+                validator_identity: [11u8; 32],
+                stake: 700_000_000_000,
+            },
+            ValidatorSetEntry {
+                vote_authority: [20u8; 32],
+                validator_identity: [21u8; 32],
+                stake: 300_000_000_000,
+            },
+        ],
+        total_epoch_stake: 1_000_000_000_000,
+        slot: 12345,
+    }
 }

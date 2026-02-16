@@ -11,6 +11,8 @@
 
 extern crate alloc;
 
+use alloc::format;
+use alloc::string::String;
 use alloc::vec::Vec;
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
@@ -90,6 +92,114 @@ pub struct EVMProofWitness {
     pub to: [u8; 20],
     /// ETH value transferred
     pub value: u64,
+}
+
+// ============================================================================
+// Witness Validation
+// ============================================================================
+
+/// Maximum allowed depth for MPT proofs.
+///
+/// Ethereum's MPT has a key space of 32 bytes (64 nibbles). With branch
+/// factor 16, the theoretical max depth is 64. In practice, tx/receipt
+/// tries are much shallower — 20 levels handles well beyond the largest
+/// blocks observed on Base.
+pub const MAX_MPT_PROOF_DEPTH: usize = 20;
+
+/// Maximum allowed RLP size for a block header (bytes).
+///
+/// Post-merge EIP-4844 headers can reach ~1 KB. We allow 2 KB for headroom.
+pub const MAX_BLOCK_HEADER_RLP_SIZE: usize = 2048;
+
+/// Maximum allowed RLP size for a single transaction (bytes).
+///
+/// ERC-4337 bundles and large calldata can push transactions up to ~128 KB.
+pub const MAX_TRANSACTION_RLP_SIZE: usize = 131_072;
+
+/// Maximum allowed RLP size for a receipt (bytes).
+///
+/// Receipts with many log entries can be large but rarely exceed 128 KB.
+pub const MAX_RECEIPT_RLP_SIZE: usize = 131_072;
+
+impl EVMProofWitness {
+    /// Validate witness structure before proof generation.
+    ///
+    /// Catches structural errors early so they surface as clear error
+    /// messages rather than opaque circuit panics after minutes of proving.
+    ///
+    /// # Checks
+    /// - Block hash is non-zero
+    /// - Block header RLP is non-empty and within size bounds
+    /// - Transaction RLP is non-empty and within size bounds
+    /// - Receipt RLP is non-empty and within size bounds
+    /// - MPT proof depths are within bounds
+    /// - Block number is non-zero
+    pub fn validate(&self) -> Result<(), String> {
+        if self.block_hash == [0u8; 32] {
+            return Err("Block hash must not be zero".into());
+        }
+
+        if self.block_header_rlp.is_empty() {
+            return Err("Block header RLP must not be empty".into());
+        }
+        if self.block_header_rlp.len() > MAX_BLOCK_HEADER_RLP_SIZE {
+            return Err(format!(
+                "Block header RLP too large: {} bytes (max {})",
+                self.block_header_rlp.len(),
+                MAX_BLOCK_HEADER_RLP_SIZE,
+            ));
+        }
+
+        if self.transaction_rlp.is_empty() {
+            return Err("Transaction RLP must not be empty".into());
+        }
+        if self.transaction_rlp.len() > MAX_TRANSACTION_RLP_SIZE {
+            return Err(format!(
+                "Transaction RLP too large: {} bytes (max {})",
+                self.transaction_rlp.len(),
+                MAX_TRANSACTION_RLP_SIZE,
+            ));
+        }
+
+        if self.receipt_rlp.is_empty() {
+            return Err("Receipt RLP must not be empty".into());
+        }
+        if self.receipt_rlp.len() > MAX_RECEIPT_RLP_SIZE {
+            return Err(format!(
+                "Receipt RLP too large: {} bytes (max {})",
+                self.receipt_rlp.len(),
+                MAX_RECEIPT_RLP_SIZE,
+            ));
+        }
+
+        if self.tx_proof_nodes.is_empty() {
+            return Err("Transaction MPT proof must have at least one node".into());
+        }
+        if self.tx_proof_nodes.len() > MAX_MPT_PROOF_DEPTH {
+            return Err(format!(
+                "Transaction MPT proof too deep: {} levels (max {})",
+                self.tx_proof_nodes.len(),
+                MAX_MPT_PROOF_DEPTH,
+            ));
+        }
+
+        if self.receipt_proof_nodes.is_empty() {
+            return Err("Receipt MPT proof must have at least one node".into());
+        }
+        if self.receipt_proof_nodes.len() > MAX_MPT_PROOF_DEPTH {
+            return Err(format!(
+                "Receipt MPT proof too deep: {} levels (max {})",
+                self.receipt_proof_nodes.len(),
+                MAX_MPT_PROOF_DEPTH,
+            ));
+        }
+
+        if self.block_number == 0 {
+            return Err("Block number must not be zero".into());
+        }
+
+        Ok(())
+    }
 }
 
 // ============================================================================

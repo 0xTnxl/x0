@@ -40,6 +40,64 @@ use x0_sp1_solana_common::{BankHashComponents, SolanaProofWitness};
 /// Validators typically vote within 1-4 slots. We scan 8 for safety.
 const VOTE_LOOKAHEAD_SLOTS: u64 = 8;
 
+// ============================================================================
+// SlotStateProvider Trait
+// ============================================================================
+
+/// Abstraction for fetching slot-level state data.
+///
+/// This trait enables swapping the data source between:
+/// - **Standard RPC** (current implementation — suitable for devnet/testnet)
+/// - **Geyser gRPC plugin** (production — exact slot-level snapshots)
+/// - **Mock provider** (testing — synthetic data)
+///
+/// # Production Notes
+///
+/// The default RPC implementation fetches CURRENT account state, which may
+/// differ from historical state for frequently-modified accounts. For mainnet
+/// production use, implement this trait with a Geyser plugin (e.g., Jito,
+/// Yellowstone) that captures exact state at each slot boundary.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// struct GeyserProvider { /* ... */ }
+///
+/// impl SlotStateProvider for GeyserProvider {
+///     fn fetch_delta_accounts(&self, slot: Slot) -> Result<Vec<(Pubkey, Account)>> {
+///         // Use Geyser gRPC to get exact accounts modified in this slot
+///     }
+///     fn fetch_bank_hash(&self, slot: Slot) -> Result<[u8; 32]> {
+///         // Bank hash from Geyser slot notification
+///     }
+///     fn fetch_parent_bank_hash(&self, slot: Slot) -> Result<[u8; 32]> {
+///         // Bank hash of slot S-1 from Geyser
+///     }
+/// }
+/// ```
+pub trait SlotStateProvider {
+    /// Fetch all accounts modified in a specific slot (the "delta set").
+    ///
+    /// The returned accounts must reflect their state AT the target slot,
+    /// not the current state. Using stale/current state will cause the
+    /// circuit's Merkle proof to fail.
+    fn fetch_delta_accounts(&self, slot: Slot) -> Result<Vec<(Pubkey, Account)>>;
+
+    /// Fetch the bank hash for a specific slot.
+    ///
+    /// This is the hash that validators vote on. It commits to the
+    /// accounts_delta_hash via:
+    /// `bank_hash(S) = SHA-256(parent || delta || sig_count || blockhash)`
+    fn fetch_bank_hash(&self, slot: Slot) -> Result<[u8; 32]>;
+
+    /// Fetch the parent bank hash (bank hash of slot S-1).
+    ///
+    /// Required for bank hash derivation verification in the circuit.
+    /// SHA-256 preimage resistance ensures authenticity: if bank_hash(S)
+    /// is quorum-verified, its preimage (including parent) must be correct.
+    fn fetch_parent_bank_hash(&self, slot: Slot) -> Result<[u8; 32]>;
+}
+
 /// Fetch all data needed to construct a `SolanaProofWitness` for an SP1 proof
 ///
 /// # Arguments
@@ -55,6 +113,7 @@ pub async fn fetch_witness(
     bridge_program: &Pubkey,
     pda: &Pubkey,
     account: &Account,
+    require_quorum: bool,
 ) -> Result<SolanaProofWitness> {
     info!("=== Fetching SP1 Proof Witness ===");
     info!("BridgeOutMessage PDA: {}", pda);
@@ -280,11 +339,20 @@ pub async fn fetch_witness(
     );
 
     if confirmed_stake * 3 < total_epoch_stake * 2 {
-        warn!(
-            "Insufficient quorum! Need ≥ 66.7%, have {:.1}%. \
-             Try increasing VOTE_LOOKAHEAD_SLOTS or waiting for more votes.",
-            (confirmed_stake as f64 / total_epoch_stake as f64) * 100.0
-        );
+        let pct = (confirmed_stake as f64 / total_epoch_stake as f64) * 100.0;
+        if require_quorum {
+            anyhow::bail!(
+                "Insufficient quorum: {:.1}% (need ≥ 66.7%). \
+                 Use --skip-quorum-wait to proceed anyway, or wait for more votes.",
+                pct
+            );
+        } else {
+            warn!(
+                "Insufficient quorum! {:.1}% (need ≥ 66.7%). \
+                 Proceeding anyway (--skip-quorum-wait).",
+                pct
+            );
+        }
     }
 
     // ========================================================================

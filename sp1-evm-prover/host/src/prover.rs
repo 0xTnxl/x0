@@ -35,6 +35,12 @@ const EVM_VERIFIER_ELF: &[u8] = include_bytes!("../../guest/elf/riscv32im-succin
 pub fn generate_proof(
     witness: &EVMProofWitness,
 ) -> Result<(Vec<u8>, EVMProofPublicInputs)> {
+    // Pre-validate witness structure before spending compute on proof generation.
+    witness
+        .validate()
+        .map_err(|e| anyhow::anyhow!(e))
+        .context("Witness pre-validation failed — fix inputs before proving")?;
+
     let client = ProverClient::new();
 
     let mut stdin = SP1Stdin::new();
@@ -80,6 +86,12 @@ pub fn generate_proof(
 pub fn generate_mock_proof(
     witness: &EVMProofWitness,
 ) -> Result<(Vec<u8>, EVMProofPublicInputs)> {
+    // Pre-validate even for mock proofs — catches bugs early.
+    witness
+        .validate()
+        .map_err(|e| anyhow::anyhow!(e))
+        .context("Witness pre-validation failed — fix inputs before proving")?;
+
     let client = ProverClient::mock();
 
     let mut stdin = SP1Stdin::new();

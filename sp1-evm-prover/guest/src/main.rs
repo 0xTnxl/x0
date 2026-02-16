@@ -28,7 +28,11 @@
 sp1_zkvm::entrypoint!(main);
 
 use tiny_keccak::{Hasher, Keccak};
-use x0_sp1_evm_common::{EVMProofPublicInputs, EVMProofWitness, EventLog};
+use x0_sp1_evm_common::{
+    EVMProofPublicInputs, EVMProofWitness, EventLog,
+    MAX_MPT_PROOF_DEPTH, MAX_BLOCK_HEADER_RLP_SIZE,
+    MAX_TRANSACTION_RLP_SIZE, MAX_RECEIPT_RLP_SIZE,
+};
 
 pub fn main() {
     // ========================================================================
@@ -36,6 +40,51 @@ pub fn main() {
     // ========================================================================
 
     let witness: EVMProofWitness = sp1_zkvm::io::read();
+
+    // ========================================================================
+    // Step 1b: Validate witness bounds (defense-in-depth)
+    //
+    // These checks bound the circuit's input size, preventing a malicious
+    // host from supplying adversarial data that bloats cycle count or
+    // triggers unbounded memory allocation inside the zkVM.
+    // ========================================================================
+
+    assert!(
+        witness.block_hash != [0u8; 32],
+        "Block hash must not be zero"
+    );
+    assert!(
+        !witness.block_header_rlp.is_empty(),
+        "Block header RLP must not be empty"
+    );
+    assert!(
+        witness.block_header_rlp.len() <= MAX_BLOCK_HEADER_RLP_SIZE,
+        "Block header RLP exceeds max size"
+    );
+    assert!(
+        !witness.transaction_rlp.is_empty(),
+        "Transaction RLP must not be empty"
+    );
+    assert!(
+        witness.transaction_rlp.len() <= MAX_TRANSACTION_RLP_SIZE,
+        "Transaction RLP exceeds max size"
+    );
+    assert!(
+        !witness.receipt_rlp.is_empty(),
+        "Receipt RLP must not be empty"
+    );
+    assert!(
+        witness.receipt_rlp.len() <= MAX_RECEIPT_RLP_SIZE,
+        "Receipt RLP exceeds max size"
+    );
+    assert!(
+        witness.tx_proof_nodes.len() <= MAX_MPT_PROOF_DEPTH,
+        "Transaction MPT proof exceeds max depth"
+    );
+    assert!(
+        witness.receipt_proof_nodes.len() <= MAX_MPT_PROOF_DEPTH,
+        "Receipt MPT proof exceeds max depth"
+    );
 
     // ========================================================================
     // Step 2: Verify block header hash

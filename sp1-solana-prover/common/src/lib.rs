@@ -317,7 +317,14 @@ impl SolanaProofWitness {
             return Err("Account lamports is zero — account hash would be zeroed".into());
         }
 
-        // 9. Check vote stake arithmetic won't overflow
+        // 9. Account owner must be non-zero (defense-in-depth)
+        if self.account_owner == [0u8; 32] {
+            return Err(
+                "Account owner is zero — the account may be closed or uninitialized".into(),
+            );
+        }
+
+        // 10. Check vote stake arithmetic won't overflow
         let total_vote_stake: Option<u64> = self
             .validator_votes
             .iter()

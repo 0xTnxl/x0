@@ -48,6 +48,7 @@ contract X0UnlockContractTest is Test {
 
     bytes32 public programVKey = bytes32(uint256(0x1234));
     bytes32 public solanaBridgeProgram = bytes32(uint256(0x5678));
+    bytes32 public validatorSetHash = bytes32(uint256(0xAABBCC));
 
     function setUp() public {
         usdc = new MockUSDC();
@@ -67,6 +68,10 @@ contract X0UnlockContractTest is Test {
         usdc.approve(address(unlock), type(uint256).max);
         vm.prank(depositor);
         unlock.deposit(10_000_000_000_000);
+
+        // Register a valid validator set hash
+        vm.prank(admin);
+        unlock.setValidatorSetHash(validatorSetHash, true);
     }
 
     // ========================================================================
@@ -85,7 +90,10 @@ contract X0UnlockContractTest is Test {
             recipient,                // evmRecipient
             amount,                   // amount
             int64(1700000000),        // burnTimestamp
-            bytes32(uint256(0xDEF))  // accountHash
+            bytes32(uint256(0xDEF)), // accountHash
+            validatorSetHash,         // validatorSetHash
+            uint64(12345),            // slot
+            uint64(500_000_000_000_000_000) // totalEpochStake (500M SOL)
         );
     }
 
@@ -170,7 +178,10 @@ contract X0UnlockContractTest is Test {
             user,
             uint64(50_000_000),
             int64(1700000000),
-            bytes32(uint256(0xDEF))
+            bytes32(uint256(0xDEF)),
+            validatorSetHash,
+            uint64(12345),
+            uint64(500_000_000_000_000_000)
         );
 
         vm.expectRevert(X0UnlockContract.InvalidPublicValues.selector);
@@ -357,5 +368,54 @@ contract X0UnlockContractTest is Test {
 
     function test_remainingDailyVolume() public view {
         assertEq(unlock.remainingDailyVolume(), 5_000_000_000_000);
+    }
+
+    // ========================================================================
+    // Tests: Validator Set Hash
+    // ========================================================================
+
+    function test_unknown_validator_set_hash_reverts() public {
+        bytes32 unknownHash = bytes32(uint256(0xDEAD));
+        bytes memory badPv = abi.encode(
+            solanaBridgeProgram,
+            uint64(100),
+            bytes32(uint256(0xABC)),
+            user,
+            uint64(50_000_000),
+            int64(1700000000),
+            bytes32(uint256(0xDEF)),
+            unknownHash,           // not registered
+            uint64(12345),
+            uint64(500_000_000_000_000_000)
+        );
+
+        vm.expectRevert(X0UnlockContract.InvalidValidatorSetHash.selector);
+        unlock.unlock(hex"1234", badPv);
+    }
+
+    function test_setValidatorSetHash_add_and_revoke() public {
+        bytes32 newHash = bytes32(uint256(0xFEED));
+
+        // Add
+        vm.prank(admin);
+        unlock.setValidatorSetHash(newHash, true);
+        assertTrue(unlock.validValidatorSetHashes(newHash));
+
+        // Revoke
+        vm.prank(admin);
+        unlock.setValidatorSetHash(newHash, false);
+        assertFalse(unlock.validValidatorSetHashes(newHash));
+    }
+
+    function test_setValidatorSetHash_zero_reverts() public {
+        vm.prank(admin);
+        vm.expectRevert(X0UnlockContract.InvalidValidatorSetHash.selector);
+        unlock.setValidatorSetHash(bytes32(0), true);
+    }
+
+    function test_setValidatorSetHash_nonAdmin_reverts() public {
+        vm.prank(user);
+        vm.expectRevert(); // OwnableUnauthorizedAccount
+        unlock.setValidatorSetHash(bytes32(uint256(0xFEED)), true);
     }
 }
