@@ -23,6 +23,9 @@
 
 mod artifacts;
 mod prover;
+mod multi_rpc;
+mod l1_finality;
+mod solana_bridge;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -43,9 +46,30 @@ struct Cli {
 enum Commands {
     /// Generate a STARK proof for an EVM lock transaction
     Prove {
-        /// Base (EVM) RPC URL
-        #[arg(long, env = "BASE_RPC_URL")]
-        rpc_url: String,
+        /// Base (EVM) RPC URLs (comma-separated, requires at least 2 for consensus)
+        /// Example: https://mainnet.base.org,https://base.llamarpc.com
+        #[arg(long, env = "BASE_RPC_URLS", value_delimiter = ',', num_args = 2..)]
+        rpc_urls: Vec<String>,
+
+        /// Ethereum L1 RPC URL (for finality verification)
+        #[arg(long, env = "ETH_L1_RPC_URL")]
+        eth_l1_rpc: String,
+
+        /// Base network (base-mainnet or base-sepolia)
+        #[arg(long, env = "BASE_NETWORK", default_value = "base-mainnet")]
+        network: String,
+
+        /// Solana RPC URL (to fetch trusted anchor)
+        #[arg(long, env = "SOLANA_RPC_URL", default_value = "https://api.mainnet-beta.solana.com")]
+        solana_rpc: String,
+
+        /// x0-bridge program ID on Solana (hex or base58)
+        #[arg(long, env = "BRIDGE_PROGRAM_ID")]
+        bridge_program: String,
+
+        /// Minimum RPC consensus (M-of-N agreement required)
+        #[arg(long, default_value = "2")]
+        min_consensus: usize,
 
         /// Transaction hash to prove (hex, 0x-prefixed)
         #[arg(long)]
@@ -58,14 +82,6 @@ enum Commands {
         /// Output file for public inputs (JSON)
         #[arg(long, default_value = "public_inputs.json")]
         public_inputs_output: PathBuf,
-
-        /// Trusted anchor block number (chain proof starts here)
-        #[arg(long, env = "ANCHOR_BLOCK")]
-        anchor_block: u64,
-
-        /// Trusted anchor block hash (hex, 0x-prefixed, 32 bytes)
-        #[arg(long, env = "ANCHOR_HASH")]
-        anchor_hash: String,
 
         /// X0LockContract address to filter event logs (hex, 0x-prefixed)
         /// If not set, all contract logs are included.
@@ -107,35 +123,58 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Prove {
-            rpc_url,
+            rpc_urls,
+            eth_l1_rpc,
+            network,
+            solana_rpc,
+            bridge_program,
+            min_consensus,
             tx_hash,
             output,
             public_inputs_output,
-            anchor_block,
-            anchor_hash,
             lock_contract,
             include_transfer_events,
             mock,
         } => {
             tracing::info!("Starting proof generation for tx: {}", tx_hash);
+            tracing::info!("Using {} Base RPC endpoints with {}-of-{} consensus",
+                rpc_urls.len(), min_consensus, rpc_urls.len());
 
-            // Parse anchor hash from hex string
-            let anchor_hash_str = anchor_hash.strip_prefix("0x").unwrap_or(&anchor_hash);
-            let anchor_hash_bytes = hex::decode(anchor_hash_str)
-                .context("Invalid anchor hash hex")?;
-            anyhow::ensure!(
-                anchor_hash_bytes.len() == 32,
-                "Anchor hash must be 32 bytes, got {}",
-                anchor_hash_bytes.len()
-            );
-            let mut anchor_hash_arr = [0u8; 32];
-            anchor_hash_arr.copy_from_slice(&anchor_hash_bytes);
+            // Step 0: Fetch trusted anchor from Solana
+            tracing::info!("Fetching trusted anchor from Solana: {}", solana_rpc);
+            let solana_client = solana_bridge::SolanaBridgeClient::new(&solana_rpc)?;
+            
+            let bridge_program_id = bridge_program
+                .parse::<solana_sdk::pubkey::Pubkey>()
+                .context("Invalid bridge program ID")?;
+
+            let (anchor_block, anchor_hash_arr) = solana_client
+                .fetch_trusted_anchor(&bridge_program_id)
+                .await
+                .context("Failed to fetch trusted anchor from Solana")?;
 
             tracing::info!(
-                "Chain proof anchor: block={}, hash=0x{}",
+                "✓ Chain proof anchor: block={}, hash=0x{}",
                 anchor_block,
                 hex::encode(anchor_hash_arr),
             );
+
+            // Step 0.5: Check if anchor is stale (warn only, don't fail)
+            tracing::info!("Checking anchor staleness against latest Base L2 block...");
+            let temp_provider = multi_rpc::ConsensusProvider::new(rpc_urls.clone(), min_consensus)
+                .context("Failed to create temporary consensus provider")?;
+            
+            let latest_l2_block = temp_provider
+                .get_block_number_consensus()
+                .await
+                .context("Failed to get latest L2 block number")?;
+
+            solana_client
+                .check_anchor_staleness(&bridge_program_id, latest_l2_block)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!("Failed to check anchor staleness: {}", e);
+                });
 
             // Parse event log filters
             let relevant_contracts: Vec<[u8; 20]> = if let Some(ref addr) = lock_contract {
@@ -164,11 +203,18 @@ async fn main() -> Result<()> {
                 relevant_topics.len(),
             );
 
-            // Step 1: Fetch EVM artifacts (including chain proof)
-            tracing::info!("Fetching EVM artifacts from {}", rpc_url);
+            // Step 1: Fetch EVM artifacts (including chain proof with L1 finality verification)
+            tracing::info!("Fetching EVM artifacts via multi-RPC consensus...");
             let witness = artifacts::fetch_evm_artifacts(
-                &rpc_url, &tx_hash, anchor_block, anchor_hash_arr,
-                relevant_contracts, relevant_topics,
+                rpc_urls,
+                &eth_l1_rpc,
+                &network,
+                min_consensus,
+                &tx_hash,
+                anchor_block,
+                anchor_hash_arr,
+                relevant_contracts,
+                relevant_topics,
             )
                 .await
                 .context("Failed to fetch EVM artifacts")?;

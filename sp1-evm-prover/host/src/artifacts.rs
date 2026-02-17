@@ -4,7 +4,6 @@
 //! from an EVM-compatible RPC node (Base/Ethereum).
 
 use alloy_primitives::{B256, U256};
-use alloy_provider::{Provider, ProviderBuilder};
 use alloy_rpc_types::{Block, TransactionReceipt};
 use alloy_consensus::TxType;
 use anyhow::{anyhow, bail, Context, Result};
@@ -13,25 +12,35 @@ use x0_sp1_evm_common::{
     EVMProofWitness, ChainProof, BlockHeaderRLP, MAX_CHAIN_PROOF_DEPTH,
 };
 
+use crate::multi_rpc::ConsensusProvider;
+use crate::l1_finality::{L1FinalityVerifier, Network};
+
 /// Fetch all EVM artifacts needed for proof generation
 ///
 /// This function:
-/// 1. Fetches the transaction by hash
-/// 2. Fetches the full block (with transactions)
-/// 3. Fetches the transaction receipt
-/// 4. Constructs Merkle-Patricia Trie proofs for tx and receipt
-/// 5. Fetches consecutive block headers from anchor to target block
-/// 6. Returns an EVMProofWitness ready for the SP1 guest
+/// 1. Fetches the transaction by hash (with multi-RPC consensus)
+/// 2. Fetches the full block (with transactions, multi-RPC consensus)
+/// 3. Fetches the transaction receipt (multi-RPC consensus)
+/// 4. Verifies L1 finality (Base OutputOracle on Ethereum L1)
+/// 5. Constructs Merkle-Patricia Trie proofs for tx and receipt
+/// 6. Fetches consecutive block headers from anchor to target block
+/// 7. Returns an EVMProofWitness ready for the SP1 guest
 ///
 /// # Arguments
-/// * `rpc_url` - EVM RPC endpoint
+/// * `rpc_urls` - Multiple EVM RPC endpoints (requires at least 2)
+/// * `eth_l1_rpc` - Ethereum L1 RPC endpoint (for finality verification)
+/// * `network` - Base network ("base-mainnet" or "base-sepolia")
+/// * `min_consensus` - Minimum number of RPCs that must agree (M-of-N)
 /// * `tx_hash_hex` - Transaction hash (hex, 0x-prefixed)
 /// * `anchor_block` - Trusted anchor block number
 /// * `anchor_hash` - Expected hash of the anchor block (for local validation)
 /// * `relevant_contracts` - Contract addresses to filter event logs (empty = all)
 /// * `relevant_topics` - Event topic signatures to filter logs (empty = all)
 pub async fn fetch_evm_artifacts(
-    rpc_url: &str,
+    rpc_urls: Vec<String>,
+    eth_l1_rpc: &str,
+    network_str: &str,
+    min_consensus: usize,
     tx_hash_hex: &str,
     anchor_block: u64,
     anchor_hash: [u8; 32],
@@ -42,15 +51,23 @@ pub async fn fetch_evm_artifacts(
         .parse()
         .context("Invalid transaction hash format")?;
 
-    let provider = ProviderBuilder::new()
-        .on_http(rpc_url.parse().context("Invalid RPC URL")?);
+    // Parse network
+    let network = match network_str {
+        "base-mainnet" => Network::BaseMainnet,
+        "base-sepolia" => Network::BaseSepolia,
+        _ => bail!("Invalid network: {} (must be 'base-mainnet' or 'base-sepolia')", network_str),
+    };
 
-    // Fetch transaction
-    tracing::debug!("Fetching transaction {}", tx_hash_hex);
+    // Create consensus provider (Byzantine fault-tolerant)
+    tracing::info!("Initializing {}-of-{} RPC consensus provider", min_consensus, rpc_urls.len());
+    let provider = ConsensusProvider::new(rpc_urls.clone(), min_consensus)?;
+
+    // Fetch transaction (with consensus)
+    tracing::debug!("Fetching transaction {} with consensus", tx_hash_hex);
     let tx = provider
-        .get_transaction_by_hash(tx_hash)
+        .get_transaction_by_hash_consensus(tx_hash)
         .await
-        .context("Failed to fetch transaction")?
+        .context("Failed to fetch transaction via consensus")?
         .ok_or_else(|| anyhow!("Transaction not found: {}", tx_hash_hex))?;
 
     let block_number = tx
@@ -62,62 +79,46 @@ pub async fn fetch_evm_artifacts(
         .ok_or_else(|| anyhow!("Transaction has no index"))?;
 
     // ====================================================================
-    // Verify block finality
+    // Verify L1 finality
     //
     // On Base (OP Stack), blocks are soft-confirmed every 2 seconds but
-    // can be reorganized until they are posted to L1. We require at least
-    // REQUIRED_CONFIRMATIONS blocks (~2 minutes) to mitigate reorg risk.
+    // can be reorganized until they are posted to Ethereum L1.
     //
-    // For production deployments, consider waiting for L1 finality (~15 min).
+    // We query the OutputOracle contract on L1 to verify the block has
+    // been finalized (typically 15-20 minutes after L2 soft-confirmation).
+    //
+    // This prevents proving transactions that could be reverted in a reorg.
     // ====================================================================
 
-    const REQUIRED_CONFIRMATIONS: u64 = 60; // ~2 minutes on Base (2s blocks)
-
-    let latest_block = provider
-        .get_block_number()
+    tracing::info!("Verifying L1 finality for block {}", block_number);
+    let l1_verifier = L1FinalityVerifier::new(eth_l1_rpc, network)?;
+    
+    l1_verifier
+        .verify_l1_finality(block_number)
         .await
-        .context("Failed to fetch latest block number")?;
+        .context("L1 finality verification failed")?;
 
-    let confirmations = latest_block.saturating_sub(block_number);
-
-    if confirmations < REQUIRED_CONFIRMATIONS {
-        bail!(
-            "Block {} needs {} more confirmations (has {}, requires {}). \
-             Wait ~{} seconds before proving.",
-            block_number,
-            REQUIRED_CONFIRMATIONS - confirmations,
-            confirmations,
-            REQUIRED_CONFIRMATIONS,
-            (REQUIRED_CONFIRMATIONS - confirmations) * 2,
-        );
-    }
-
-    tracing::info!(
-        "Block {} has {} confirmations (required: {})",
-        block_number,
-        confirmations,
-        REQUIRED_CONFIRMATIONS,
-    );
+    tracing::info!("✓ Block {} is L1-finalized", block_number);
 
     // Validate transaction type before proceeding
     validate_tx_type(tx.transaction_type)?;
 
-    // Fetch full block
-    tracing::debug!("Fetching block {}", block_number);
-    let block: Block = provider
-        .get_block_by_number(block_number.into(), true)
+    // Fetch full block (with consensus)
+    tracing::debug!("Fetching block {} with consensus", block_number);
+    let block = provider
+        .get_block_by_number_consensus(block_number.into(), true)
         .await
-        .context("Failed to fetch block")?
+        .context("Failed to fetch block via consensus")?
         .ok_or_else(|| anyhow!("Block not found: {}", block_number))?;
 
     let block_hash = block.header.hash;
 
-    // Fetch receipt
-    tracing::debug!("Fetching receipt for {}", tx_hash_hex);
-    let receipt: TransactionReceipt = provider
-        .get_transaction_receipt(tx_hash)
+    // Fetch receipt (with consensus)
+    tracing::debug!("Fetching receipt for {} with consensus", tx_hash_hex);
+    let receipt = provider
+        .get_transaction_receipt_consensus(tx_hash)
         .await
-        .context("Failed to fetch receipt")?
+        .context("Failed to fetch receipt via consensus")?
         .ok_or_else(|| anyhow!("Receipt not found: {}", tx_hash_hex))?;
 
     // Verify receipt status
@@ -132,8 +133,11 @@ pub async fn fetch_evm_artifacts(
     // or construct proofs locally from the full block data
     tracing::debug!("Constructing Merkle-Patricia Trie proofs");
 
+    // Use first RPC URL for raw transaction fetching (if needed)
+    let rpc_url_for_raw = rpc_urls.first().unwrap();
+
     let (block_header_rlp, tx_rlp, receipt_rlp, tx_proof_nodes, receipt_proof_nodes) =
-        construct_proofs(&provider, rpc_url, &block, tx_index as u32, &receipt)
+        construct_proofs(&provider, rpc_url_for_raw, &block, tx_index as u32, &receipt)
             .await
             .context("Failed to construct MPT proofs")?;
 
@@ -196,7 +200,7 @@ pub async fn fetch_evm_artifacts(
 
     let chain_proof = fetch_chain_proof(
         &provider,
-        rpc_url,
+        "",  // rpc_url not used in fetch_chain_proof
         anchor_block,
         block_number,
         &block,
@@ -236,8 +240,8 @@ pub async fn fetch_evm_artifacts(
 /// - The target block's header is taken from the already-fetched `target_block_data`
 /// - All intermediate + anchor headers are fetched via `eth_getBlockByNumber`
 /// - Each header is RLP-encoded and its hash is computed for validation
-async fn fetch_chain_proof<P: Provider<T>, T: alloy_transport::Transport + Clone>(
-    provider: &P,
+async fn fetch_chain_proof(
+    provider: &ConsensusProvider,
     _rpc_url: &str,
     anchor_block: u64,
     target_block: u64,
@@ -248,10 +252,10 @@ async fn fetch_chain_proof<P: Provider<T>, T: alloy_transport::Transport + Clone
 
     // Fetch all blocks from anchor to target-1 (target is already fetched)
     for block_num in anchor_block..target_block {
-        let block: Block = provider
-            .get_block_by_number(block_num.into(), false)
+        let block = provider
+            .get_block_by_number_consensus(block_num.into(), false)
             .await
-            .with_context(|| format!("Failed to fetch block {}", block_num))?
+            .with_context(|| format!("Failed to fetch block {} via consensus", block_num))?
             .ok_or_else(|| anyhow!("Block {} not found", block_num))?;
 
         let rlp = rlp_encode_block_header(&block)?;
@@ -322,8 +326,8 @@ async fn fetch_chain_proof<P: Provider<T>, T: alloy_transport::Transport + Clone
 /// Uses `eth_getProof`-style approach or builds proofs from full block data.
 /// For Base/OP-stack chains, we fetch all transactions/receipts and build
 /// the trie locally.
-async fn construct_proofs<P: Provider<T>, T: alloy_transport::Transport + Clone>(
-    provider: &P,
+async fn construct_proofs(
+    provider: &ConsensusProvider,
     rpc_url: &str,
     block: &Block,
     tx_index: u32,
@@ -370,12 +374,11 @@ async fn construct_proofs<P: Provider<T>, T: alloy_transport::Transport + Clone>
         .clone();
 
     // Build receipt trie and get proof
-    // Fetch all receipts for the block
+    // Fetch all receipts for the block (with consensus)
     let block_receipts = provider
-        .get_block_receipts(block.header.number.into())
+        .get_block_receipts_consensus(block.header.number)
         .await
-        .context("Failed to fetch block receipts")?
-        .ok_or_else(|| anyhow!("Block receipts not found"))?;
+        .context("Failed to fetch block receipts via consensus")?;
 
     let receipt_rlps: Vec<Vec<u8>> = block_receipts
         .iter()

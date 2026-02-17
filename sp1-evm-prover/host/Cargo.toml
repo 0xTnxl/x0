@@ -18,9 +18,12 @@ alloy-rpc-types = "0.3"
 alloy-primitives = "0.8"
 alloy-consensus = "0.3"
 alloy-rlp = "0.3"
+alloy-sol-types = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 borsh = "0.10"
+solana-client = "2.0"
+solana-sdk = "2.0"
 clap = { version = "4", features = ["derive"] }
 anyhow = "1.0"
 hex = "0.4"
