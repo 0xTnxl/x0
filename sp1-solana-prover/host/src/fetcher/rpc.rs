@@ -31,7 +31,8 @@ use solana_sdk::{
 use solana_transaction_status::{
     TransactionDetails, UiConfirmedBlock, UiTransactionEncoding,
 };
-use tracing::{debug, info, warn};
+use solana_vote_program::vote_state::VoteState;
+use tracing::{debug, error, info, warn};
 use x0_sp1_solana_common::ValidatorSetEntry;
 
 // ============================================================================
@@ -112,8 +113,15 @@ pub fn fetch_vote_blocks(
 /// completely different key (e.g., a hot key delegated by the validator).
 /// Using the wrong key causes Ed25519 verification failures in the circuit.
 ///
-/// We fetch each vote account's on-chain data and parse the `authorized_voters`
-/// map to get the current epoch's authorized voter.
+/// # VoteState Deserialization
+///
+/// We use the official `solana-vote-program` crate's `VoteState::deserialize`
+/// instead of hand-rolled bincode parsing. This handles all current and future
+/// `VoteStateVersions` layout changes correctly.
+///
+/// Validators whose `VoteState` cannot be deserialized are **skipped** (not
+/// fallen back to their vote account pubkey). Using the wrong signer key would
+/// corrupt the validator set and cause Ed25519 failures in the circuit.
 pub fn fetch_vote_accounts(rpc: &RpcClient) -> Result<Vec<(Pubkey, Pubkey, u64)>> {
     info!("Fetching vote accounts with authorized voters...");
 
@@ -127,7 +135,7 @@ pub fn fetch_vote_accounts(rpc: &RpcClient) -> Result<Vec<(Pubkey, Pubkey, u64)>
     info!("Current epoch: {}", current_epoch);
 
     let mut result = Vec::new();
-    let mut parse_failures = 0u32;
+    let mut skip_count = 0u32;
 
     let all_accounts = vote_accounts
         .current
@@ -144,177 +152,82 @@ pub fn fetch_vote_accounts(rpc: &RpcClient) -> Result<Vec<(Pubkey, Pubkey, u64)>
             .parse::<Pubkey>()
             .context("Invalid node pubkey")?;
 
-        // Fetch the vote account data to get the real authorized voter
-        match rpc.get_account(&vote_pubkey) {
-            Ok(account) => {
-                match parse_authorized_voter(&account.data, current_epoch) {
-                    Some(voter) => {
-                        result.push((voter, node_pubkey, va.activated_stake));
-                    }
+        // Fetch the vote account data to deserialize VoteState
+        let account = match rpc.get_account(&vote_pubkey) {
+            Ok(a) => a,
+            Err(e) => {
+                debug!("Failed to fetch vote account {}: {}", vote_pubkey, e);
+                skip_count += 1;
+                continue;
+            }
+        };
+
+        // Use official VoteState deserialization — handles all VoteStateVersions
+        // layouts (V0_23_5, V1_14_11, Current) without fragile version heuristics.
+        let voter = match VoteState::deserialize(&account.data) {
+            Ok(vote_state) => {
+                // authorized_voters is a BTreeMap<Epoch, Pubkey>.
+                // We want the entry with the highest epoch ≤ current_epoch,
+                // matching Solana's runtime behavior in Bank::vote_account_authorized_voter.
+                let best = vote_state
+                    .authorized_voters()
+                    .iter()
+                    .filter(|(&epoch, _)| epoch <= current_epoch)
+                    .max_by_key(|(&epoch, _)| epoch)
+                    .map(|(_, voter)| *voter);
+
+                match best {
+                    Some(v) => v,
                     None => {
-                        parse_failures += 1;
-                        debug!(
-                            "Could not parse authorized voter for vote account {} — \
-                             falling back to vote account pubkey",
-                            vote_pubkey
+                        // authorized_voters map is empty or all entries are future epochs.
+                        // This can happen for never-voted accounts; skip them.
+                        error!(
+                            "Vote account {} has no authorized voter for epoch {} — skipping",
+                            vote_pubkey, current_epoch
                         );
-                        // Fallback: use vote account pubkey (may fail in circuit
-                        // if the actual authorized voter is different)
-                        result.push((vote_pubkey, node_pubkey, va.activated_stake));
+                        skip_count += 1;
+                        continue;
                     }
                 }
             }
             Err(e) => {
-                debug!("Failed to fetch vote account {}: {}", vote_pubkey, e);
-                // Skip entirely — this validator won't be in our set
+                // Deserialization failed — skip entirely rather than falling back
+                // to vote_pubkey. An incorrect signer key would cause the circuit
+                // to fail Ed25519 verification and produce a broken proof.
+                error!(
+                    "Failed to deserialize VoteState for {}: {} — skipping (not falling back to vote_pubkey)",
+                    vote_pubkey, e
+                );
+                skip_count += 1;
                 continue;
             }
-        }
+        };
+
+        result.push((voter, node_pubkey, va.activated_stake));
     }
 
-    if parse_failures > 0 {
+    if skip_count > 0 {
         warn!(
-            "{} vote accounts fell back to vote_pubkey as authority \
-             (authorized_voter parse failed). These may cause Ed25519 failures.",
-            parse_failures
+            "{} vote accounts skipped due to fetch/deserialization errors. \
+             These validators will not appear in the epoch stake set.",
+            skip_count
         );
     }
 
     info!(
-        "Found {} vote accounts ({} current, {} delinquent)",
+        "Found {} valid vote accounts ({} current, {} delinquent, {} skipped)",
         result.len(),
         vote_accounts.current.len(),
-        vote_accounts.delinquent.len()
+        vote_accounts.delinquent.len(),
+        skip_count
     );
 
     Ok(result)
 }
 
-/// Parse the authorized voter for targeted epoch from serialized VoteState data.
-///
-/// # VoteState Layout (Solana v2.x, bincode-serialized)
-///
-/// ```text
-/// Offset  Field
-/// ------  -----
-/// 0       node_pubkey: Pubkey (32 bytes)
-/// 32      authorized_withdrawer: Pubkey (32 bytes)
-/// 64      commission: u8 (1 byte)
-/// 65      votes: VecDeque<Lockout> — bincode Vec<...>
-///           [u64 len] [Lockout × len]
-///           Lockout = { slot: u64, confirmation_count: u32 }  = 12 bytes each
-/// 65+8+N  root_slot: Option<u64> (1 tag byte + optionally 8 bytes)
-/// ...     authorized_voters: AuthorizedVoters (a BTreeMap<Epoch, Pubkey>)
-///           [u64 len] [(u64 epoch, Pubkey voter) × len]
-/// ```
-///
-/// We parse enough to reach `authorized_voters` and look up the target epoch.
-/// If the exact epoch isn't found, we return the most recent authorized voter
-/// (highest epoch ≤ target_epoch), matching Solana's runtime behavior.
-fn parse_authorized_voter(data: &[u8], target_epoch: u64) -> Option<Pubkey> {
-    // VoteState has a 4-byte version tag at the start in v2.x
-    // Try both versioned (with 4-byte prefix) and unversioned layouts
-    parse_authorized_voter_inner(data, target_epoch)
-        .or_else(|| {
-            // Try skipping a 4-byte version discriminant
-            if data.len() > 4 {
-                parse_authorized_voter_inner(&data[4..], target_epoch)
-            } else {
-                None
-            }
-        })
-}
-
-fn parse_authorized_voter_inner(data: &[u8], target_epoch: u64) -> Option<Pubkey> {
-    if data.len() < 65 {
-        return None; // Too short for even the header
-    }
-
-    let mut offset: usize = 0;
-
-    // node_pubkey (32 bytes)
-    offset += 32;
-
-    // authorized_withdrawer (32 bytes)
-    offset += 32;
-
-    // commission (1 byte)
-    offset += 1;
-
-    // votes: VecDeque, serialized as Vec via bincode
-    // bincode encodes length as u64 LE
-    if offset + 8 > data.len() {
-        return None;
-    }
-    let votes_len = u64::from_le_bytes(data[offset..offset + 8].try_into().ok()?) as usize;
-    offset += 8;
-
-    // Each Lockout is { slot: u64, confirmation_count: u32 } = 12 bytes
-    let votes_byte_len = votes_len.checked_mul(12)?;
-    offset = offset.checked_add(votes_byte_len)?;
-
-    if offset >= data.len() {
-        return None;
-    }
-
-    // root_slot: Option<u64> — bincode encodes Option as 1-byte tag + value
-    let root_tag = data[offset];
-    offset += 1;
-    if root_tag == 1 {
-        // Some(u64)
-        offset += 8;
-    }
-    // root_tag == 0 → None, skip
-
-    // authorized_voters: BTreeMap<Epoch, Pubkey>
-    // bincode encodes as u64 length, then key-value pairs
-    if offset + 8 > data.len() {
-        return None;
-    }
-    let num_voters = u64::from_le_bytes(data[offset..offset + 8].try_into().ok()?) as usize;
-    offset += 8;
-
-    // Sanity check: authorized_voters should be small (typically 1-3 entries)
-    if num_voters > 100 || num_voters == 0 {
-        return None;
-    }
-
-    // Parse entries and find the best match for target_epoch
-    let mut best_match: Option<(u64, Pubkey)> = None;
-
-    for _ in 0..num_voters {
-        if offset + 40 > data.len() {
-            // 8 bytes epoch + 32 bytes pubkey
-            break;
-        }
-
-        let epoch = u64::from_le_bytes(data[offset..offset + 8].try_into().ok()?);
-        offset += 8;
-
-        let voter = Pubkey::try_from(&data[offset..offset + 32]).ok()?;
-        offset += 32;
-
-        // Exact match is best
-        if epoch == target_epoch {
-            return Some(voter);
-        }
-
-        // Otherwise track the highest epoch ≤ target_epoch
-        if epoch <= target_epoch {
-            match &best_match {
-                Some((best_epoch, _)) if *best_epoch < epoch => {
-                    best_match = Some((epoch, voter));
-                }
-                None => {
-                    best_match = Some((epoch, voter));
-                }
-                _ => {}
-            }
-        }
-    }
-
-    best_match.map(|(_, voter)| voter)
-}
+// Note: VoteState parsing for authorized_voter is now handled directly in
+// fetch_vote_accounts() using solana_vote_program::vote_state::VoteState::deserialize.
+// The hand-rolled bincode parser has been removed in favour of the official crate.
 
 /// Convert vote account data to `ValidatorSetEntry` list for the circuit.
 ///
@@ -355,13 +268,34 @@ pub fn to_epoch_stakes(
 // Epoch Boundary Detection
 // ============================================================================
 
-/// Check if a slot is at an epoch boundary (first or last N slots of an epoch).
+/// Check if a slot falls within the epoch-boundary guard window.
 ///
-/// Epoch-boundary slots have a modified bank hash formula that includes
-/// `epoch_accounts_hash`. The circuit only supports the standard 4-component
-/// formula, so boundary slots MUST be rejected.
+/// # Why boundary slots are rejected
 ///
-/// Returns `Err` if boundary detection fails, `Ok(true)` if at boundary.
+/// At the **first slot of each new epoch**, Solana's `Bank::hash_internal_state`
+/// mixes an extra `EpochAccountsHash` into the bank hash preimage:
+///
+/// ```text
+/// bank_hash(S) = SHA-256(
+///     parent_bank_hash || accounts_delta_hash || sig_count || last_blockhash
+///     || epoch_accounts_hash   ← only on epoch-boundary slots
+/// )
+/// ```
+///
+/// The circuit only implements the standard 4-component formula, so any slot
+/// whose bank hash was derived with the 5-component formula will fail the
+/// `computed_bank_hash == witness.bank_hash` assertion.
+///
+/// # Impact
+///
+/// With a guard of 5 slots, approximately 10 slots per epoch (5 at start) are
+/// rejected: ~10 / 432_000 = **0.002%** of mainnet slots. This is negligible.
+/// Guarding only the start of the epoch (not the end of the previous epoch)
+/// is correct — the `epoch_accounts_hash` is mixed on `slot_in_epoch == 0`,
+/// not on the final slots of the preceding epoch.
+///
+/// Returns `Err` if boundary detection fails, `Ok(true)` if the slot is
+/// within the boundary guard window.
 pub fn is_epoch_boundary_slot(rpc: &RpcClient, slot: Slot) -> Result<bool> {
     let schedule = rpc
         .get_epoch_schedule()
@@ -372,20 +306,24 @@ pub fn is_epoch_boundary_slot(rpc: &RpcClient, slot: Slot) -> Result<bool> {
         anyhow::bail!("Invalid epoch schedule: slots_per_epoch = 0");
     }
 
-    let slot_in_epoch = slot % slots_per_epoch;
+    // Subtract first_normal_slot so pre-genesis warmup epochs don't skew the math.
+    let first_normal_slot = schedule.first_normal_slot;
+    let adjusted = slot.saturating_sub(first_normal_slot);
+    let slot_in_epoch = adjusted % slots_per_epoch;
 
-    // The first slot of an epoch (slot_in_epoch == 0) is the boundary slot
-    // where epoch_accounts_hash is mixed in. We also guard a few slots
-    // around it for safety (slot generation can vary).
+    // Guard the first BOUNDARY_GUARD_SLOTS slots of each epoch.
+    // The epoch_accounts_hash is mixed only on slot_in_epoch == 0, but we
+    // guard a small window (5 slots) to absorb any off-by-one in slot
+    // assignment during epoch transitions.
     const BOUNDARY_GUARD_SLOTS: u64 = 5;
 
-    let at_boundary = slot_in_epoch < BOUNDARY_GUARD_SLOTS
-        || slot_in_epoch >= slots_per_epoch.saturating_sub(BOUNDARY_GUARD_SLOTS);
+    let at_boundary = slot_in_epoch < BOUNDARY_GUARD_SLOTS;
 
     if at_boundary {
         info!(
-            "Slot {} is at epoch boundary (position {} in epoch of {} slots)",
-            slot, slot_in_epoch, slots_per_epoch
+            "Slot {} is in epoch-boundary guard window \
+             (position {} of {} in epoch; guarding first {})",
+            slot, slot_in_epoch, slots_per_epoch, BOUNDARY_GUARD_SLOTS
         );
     }
 
@@ -502,11 +440,26 @@ pub fn fetch_slot_delta_accounts(
 ///
 /// The `num_required_signatures` field is the first byte of the message
 /// header in each transaction.
+///
+/// # Bounds Validation
+///
+/// A plausible signature count satisfies:
+///   `tx_count ≤ sig_count ≤ tx_count × MAX_SIGNERS_PER_TX`
+///
+/// Solana enforces at most 19 signers per transaction (account key limit 64,
+/// with minimum 1 non-signer account and 1 program = 62 signers max, but
+/// in practice capped by the 1232-byte transaction size limit to ~19).
+/// We use 48 as a conservative upper bound per Solana's legacy limit.
+///
+/// If the computed count is out of range, a warning is emitted and the
+/// raw count is returned — the proof attempt will still fail at the bank
+/// hash equality check in the circuit if the count is wrong.
 pub fn count_block_signatures(block: &UiConfirmedBlock) -> u64 {
     let Some(ref transactions) = block.transactions else {
         return 0;
     };
 
+    let tx_count = transactions.len() as u64;
     let mut total_sigs: u64 = 0;
 
     for tx_with_meta in transactions {
@@ -517,17 +470,41 @@ pub fn count_block_signatures(block: &UiConfirmedBlock) -> u64 {
         };
 
         // Parse the number of signatures from the transaction wire format
-        let mut offset = 0;
+        let offset = 0;
         let Some((num_sigs, bytes_read)) = super::tx_parser::read_compact_u16(&raw, offset) else {
             continue;
         };
-        offset += bytes_read;
-        offset += num_sigs * 64; // skip past signatures
+        let sig_offset = bytes_read + num_sigs * 64;
 
         // Message header starts here: first byte is num_required_signatures
-        if offset < raw.len() {
-            let num_required_sigs = raw[offset] as u64;
+        if sig_offset < raw.len() {
+            let num_required_sigs = raw[sig_offset] as u64;
             total_sigs += num_required_sigs;
+        }
+    }
+
+    // Plausibility bounds: each tx must contribute ≥1 signature,
+    // and at most MAX_SIGNERS_PER_TX signatures.
+    const MAX_SIGNERS_PER_TX: u64 = 48;
+
+    if tx_count > 0 {
+        if total_sigs < tx_count {
+            warn!(
+                "Signature count {} is less than transaction count {} — \
+                 this may indicate a parsing error or an empty/vote-only block. \
+                 Bank hash derivation may fail.",
+                total_sigs, tx_count
+            );
+        } else if total_sigs > tx_count.saturating_mul(MAX_SIGNERS_PER_TX) {
+            warn!(
+                "Signature count {} exceeds {} × {} = {} — \
+                 this may indicate a parsing error. \
+                 Bank hash derivation may fail.",
+                total_sigs,
+                tx_count,
+                MAX_SIGNERS_PER_TX,
+                tx_count.saturating_mul(MAX_SIGNERS_PER_TX)
+            );
         }
     }
 
@@ -750,73 +727,72 @@ fn extract_writable_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use solana_vote_program::vote_state::{VoteStateVersions, VoteState as SolanaVoteState};
 
-    #[test]
-    fn test_parse_authorized_voter_empty_data() {
-        assert!(parse_authorized_voter(&[], 100).is_none());
+    /// Build a minimal serialized VoteStateVersions blob with an explicit
+    /// authorized voter at a given epoch.  Mirrors what `VoteState::deserialize`
+    /// expects so that these tests exercise the real code path.
+    fn make_vote_state_bytes(voter: Pubkey, voter_epoch: u64) -> Vec<u8> {
+        let node_pubkey = Pubkey::from([1u8; 32]);
+        let authorized_withdrawer = Pubkey::from([2u8; 32]);
+
+        // VoteState::new registers `authorized_voter` at `clock.epoch`.
+        let vote_state = SolanaVoteState::new(
+            &solana_vote_program::vote_state::VoteInit {
+                node_pubkey,
+                authorized_voter: voter,
+                authorized_withdrawer,
+                commission: 5,
+            },
+            &solana_sdk::clock::Clock {
+                epoch: voter_epoch,
+                ..Default::default()
+            },
+        );
+
+        let versioned = VoteStateVersions::new_current(vote_state);
+        bincode::serialize(&versioned).expect("VoteState serialization failed")
     }
 
     #[test]
-    fn test_parse_authorized_voter_too_short() {
-        let data = vec![0u8; 50]; // Too short for VoteState header
-        assert!(parse_authorized_voter(&data, 100).is_none());
+    fn test_vote_state_deserialize_invalid_data() {
+        // Garbled bytes should fail deserialization, not silently succeed
+        let result = VoteState::deserialize(&[0u8; 10]);
+        assert!(result.is_err(), "Expected deserialization error for invalid data");
     }
 
     #[test]
-    fn test_parse_authorized_voter_synthetic() {
-        // Build a minimal synthetic VoteState with known authorized_voter
-        let mut data = Vec::new();
+    fn test_vote_state_deserialize_finds_authorized_voter() {
+        let voter = Pubkey::from([0xABu8; 32]);
+        let data = make_vote_state_bytes(voter, 42);
 
-        // node_pubkey (32 bytes)
-        data.extend_from_slice(&[1u8; 32]);
+        let vote_state = VoteState::deserialize(&data).expect("Deserialization should succeed");
+        let best = vote_state
+            .authorized_voters()
+            .iter()
+            .filter(|(&epoch, _)| epoch <= 42)
+            .max_by_key(|(&epoch, _)| epoch)
+            .map(|(_, v)| *v);
 
-        // authorized_withdrawer (32 bytes)
-        data.extend_from_slice(&[2u8; 32]);
-
-        // commission (1 byte)
-        data.push(5);
-
-        // votes: VecDeque (bincode: u64 len = 0)
-        data.extend_from_slice(&0u64.to_le_bytes());
-
-        // root_slot: None (tag = 0)
-        data.push(0);
-
-        // authorized_voters: BTreeMap with 1 entry
-        data.extend_from_slice(&1u64.to_le_bytes()); // len = 1
-        data.extend_from_slice(&42u64.to_le_bytes()); // epoch = 42
-        let voter = [0xABu8; 32];
-        data.extend_from_slice(&voter); // voter pubkey
-
-        let result = parse_authorized_voter(&data, 42);
-        assert_eq!(result, Some(Pubkey::from(voter)));
+        assert_eq!(best, Some(voter));
     }
 
     #[test]
-    fn test_parse_authorized_voter_fallback_to_lower_epoch() {
-        // authorized_voter at epoch 40, but we query epoch 42
-        let mut data = Vec::new();
+    fn test_vote_state_deserialize_fallback_to_lower_epoch() {
+        // authorized_voter registered at epoch 40; we query at epoch 42
+        let voter = Pubkey::from([0xCDu8; 32]);
+        let data = make_vote_state_bytes(voter, 40);
 
-        // Header
-        data.extend_from_slice(&[1u8; 32]); // node_pubkey
-        data.extend_from_slice(&[2u8; 32]); // withdrawer
-        data.push(5); // commission
+        let vote_state = VoteState::deserialize(&data).expect("Deserialization should succeed");
+        let best = vote_state
+            .authorized_voters()
+            .iter()
+            .filter(|(&epoch, _)| epoch <= 42)
+            .max_by_key(|(&epoch, _)| epoch)
+            .map(|(_, v)| *v);
 
-        // Empty votes
-        data.extend_from_slice(&0u64.to_le_bytes());
-
-        // root_slot: None
-        data.push(0);
-
-        // authorized_voters: 1 entry at epoch 40
-        data.extend_from_slice(&1u64.to_le_bytes());
-        data.extend_from_slice(&40u64.to_le_bytes());
-        let voter = [0xCDu8; 32];
-        data.extend_from_slice(&voter);
-
-        // Should fall back to epoch 40's voter
-        let result = parse_authorized_voter(&data, 42);
-        assert_eq!(result, Some(Pubkey::from(voter)));
+        // epoch 40 \u2264 42, so we should get the voter registered at epoch 40
+        assert_eq!(best, Some(voter));
     }
 
     #[test]

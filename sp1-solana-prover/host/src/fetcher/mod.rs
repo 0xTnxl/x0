@@ -37,8 +37,14 @@ use x0_sp1_solana_common::{BankHashComponents, SolanaProofWitness};
 
 /// Number of subsequent blocks to scan for votes on the target bank hash.
 ///
-/// Validators typically vote within 1-4 slots. We scan 8 for safety.
-const VOTE_LOOKAHEAD_SLOTS: u64 = 8;
+/// On mainnet, Tower BFT finalization requires 32 confirmed votes, and
+/// `finalized` commitment itself takes ~32 slots. Scanning 32 subsequent
+/// slots ensures we capture all relevant vote transactions even for
+/// validators who are slightly behind in their voting.
+///
+/// For `find_bank_hash_for_slot`, the constant is doubled (64 slots) to
+/// allow additional headroom when resolving the parent slot's bank hash.
+const VOTE_LOOKAHEAD_SLOTS: u64 = 32;
 
 // ============================================================================
 // SlotStateProvider Trait
@@ -128,13 +134,16 @@ pub async fn fetch_witness(
         .context("Failed to find creation slot for BridgeOutMessage")?;
     info!("BridgeOutMessage created at slot {}", slot);
 
-    // Hard-reject epoch boundary slots — bank hash includes extra
-    // epoch_accounts_hash that the circuit doesn't account for
+    // Reject epoch-boundary slots — Solana mixes epoch_accounts_hash into the
+    // bank hash preimage on the first slot of each epoch, adding a 5th component
+    // that the circuit does not implement. The guard window is only the first
+    // ~5 slots of each epoch (~0.002% of mainnet slots — negligible impact).
     if rpc::is_epoch_boundary_slot(rpc, slot)? {
         anyhow::bail!(
-            "Slot {} is at an epoch boundary. The bank hash formula includes \
-             epoch_accounts_hash which is not supported by the circuit. \
-             Please use a slot away from epoch boundaries.",
+            "Slot {} is within the epoch-boundary guard window (first 5 slots of an epoch). \
+             The bank hash formula at epoch boundaries includes an extra epoch_accounts_hash \
+             component not implemented by the circuit. \
+             Only ~0.002% of slots are affected. Please retry with the next available slot.",
             slot
         );
     }
