@@ -28,20 +28,19 @@ use crate::l1_finality::{L1FinalityVerifier, Network};
 /// 7. Returns an EVMProofWitness ready for the SP1 guest
 ///
 /// # Arguments
-/// * `rpc_urls` - Multiple EVM RPC endpoints (requires at least 2)
+/// * `provider` - Pre-built consensus provider (caller owns it; re-used to avoid
+///               constructing duplicate connection pools)
 /// * `eth_l1_rpc` - Ethereum L1 RPC endpoint (for finality verification)
 /// * `network` - Base network ("base-mainnet" or "base-sepolia")
-/// * `min_consensus` - Minimum number of RPCs that must agree (M-of-N)
 /// * `tx_hash_hex` - Transaction hash (hex, 0x-prefixed)
 /// * `anchor_block` - Trusted anchor block number
 /// * `anchor_hash` - Expected hash of the anchor block (for local validation)
 /// * `relevant_contracts` - Contract addresses to filter event logs (empty = all)
 /// * `relevant_topics` - Event topic signatures to filter logs (empty = all)
 pub async fn fetch_evm_artifacts(
-    rpc_urls: Vec<String>,
+    provider: &ConsensusProvider,
     eth_l1_rpc: &str,
     network_str: &str,
-    min_consensus: usize,
     tx_hash_hex: &str,
     anchor_block: u64,
     anchor_hash: [u8; 32],
@@ -58,10 +57,6 @@ pub async fn fetch_evm_artifacts(
         "base-sepolia" => Network::BaseSepolia,
         _ => bail!("Invalid network: {} (must be 'base-mainnet' or 'base-sepolia')", network_str),
     };
-
-    // Create consensus provider (Byzantine fault-tolerant)
-    tracing::info!("Initializing {}-of-{} RPC consensus provider", min_consensus, rpc_urls.len());
-    let provider = ConsensusProvider::new(rpc_urls.clone(), min_consensus)?;
 
     // Fetch transaction (with consensus)
     tracing::debug!("Fetching transaction {} with consensus", tx_hash_hex);
@@ -935,6 +930,13 @@ fn rlp_encode_u32_key(value: u32) -> Vec<u8> {
 
 // ============================================================================
 // Simple In-Memory MPT Implementation
+//
+// NOTE ON DUPLICATION: The guest (guest/src/main.rs) has a `verify_mpt_proof`
+// verifier and the host (here) has a `SimpleMPT` builder. They are intentionally
+// separate because the guest runs in `no_std` SP1 zkVM and cannot import host
+// crates. Consistency is enforced by `construct_proofs`, which rebuilds the
+// full trie after proof extraction and asserts the computed root matches the
+// on-chain header root before the witness is passed to the prover.
 // ============================================================================
 
 /// A simple in-memory Merkle-Patricia Trie for proof construction

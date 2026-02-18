@@ -159,22 +159,21 @@ async fn main() -> Result<()> {
                 hex::encode(anchor_hash_arr),
             );
 
-            // Step 0.5: Check if anchor is stale (warn only, don't fail)
+            // Step 0.5: Build the consensus provider (single shared instance for
+            // the entire Prove command \u2014 avoids constructing duplicate connection pools).
+            tracing::info!("Initializing {}-of-{} RPC consensus provider",
+                min_consensus, rpc_urls.len());
+            let provider = multi_rpc::ConsensusProvider::new(rpc_urls.clone(), min_consensus)
+                .context("Failed to create consensus provider")?;
+
+            // Check if anchor is stale (warn only, don't fail)
             tracing::info!("Checking anchor staleness against latest Base L2 block...");
-            let temp_provider = multi_rpc::ConsensusProvider::new(rpc_urls.clone(), min_consensus)
-                .context("Failed to create temporary consensus provider")?;
-            
-            let latest_l2_block = temp_provider
+            let latest_l2_block = provider
                 .get_block_number_consensus()
                 .await
                 .context("Failed to get latest L2 block number")?;
 
-            solana_client
-                .check_anchor_staleness(&bridge_program_id, latest_l2_block)
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::warn!("Failed to check anchor staleness: {}", e);
-                });
+            solana_client.check_anchor_staleness(anchor_block, latest_l2_block);
 
             // Parse event log filters
             let relevant_contracts: Vec<[u8; 20]> = if let Some(ref addr) = lock_contract {
@@ -206,10 +205,9 @@ async fn main() -> Result<()> {
             // Step 1: Fetch EVM artifacts (including chain proof with L1 finality verification)
             tracing::info!("Fetching EVM artifacts via multi-RPC consensus...");
             let witness = artifacts::fetch_evm_artifacts(
-                rpc_urls,
+                &provider,
                 &eth_l1_rpc,
                 &network,
-                min_consensus,
                 &tx_hash,
                 anchor_block,
                 anchor_hash_arr,

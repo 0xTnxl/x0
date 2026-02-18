@@ -131,16 +131,36 @@ pub fn verify_proof(
     let proof: sp1_sdk::SP1ProofWithPublicValues = bincode::deserialize(proof_bytes)
         .context("Failed to deserialize proof")?;
 
-    // Verify the public inputs match expectations
+    // Verify the public inputs match expectations — every security-relevant
+    // field must match. A partial check would allow a proof over a valid tx
+    // to be replayed with forged from/to/value in the public inputs file.
     let proof_public_inputs: EVMProofPublicInputs =
         borsh::BorshDeserialize::try_from_slice(proof.public_values.as_slice())
             .context("Failed to deserialize proof public inputs")?;
 
     if proof_public_inputs.block_hash != expected_public_inputs.block_hash {
-        anyhow::bail!("Block hash mismatch");
+        anyhow::bail!("Public input mismatch: block_hash");
+    }
+    if proof_public_inputs.block_number != expected_public_inputs.block_number {
+        anyhow::bail!("Public input mismatch: block_number");
     }
     if proof_public_inputs.tx_hash != expected_public_inputs.tx_hash {
-        anyhow::bail!("Transaction hash mismatch");
+        anyhow::bail!("Public input mismatch: tx_hash");
+    }
+    if proof_public_inputs.from != expected_public_inputs.from {
+        anyhow::bail!("Public input mismatch: from");
+    }
+    if proof_public_inputs.to != expected_public_inputs.to {
+        anyhow::bail!("Public input mismatch: to");
+    }
+    if proof_public_inputs.value != expected_public_inputs.value {
+        anyhow::bail!("Public input mismatch: value");
+    }
+    if proof_public_inputs.chain_anchor_block != expected_public_inputs.chain_anchor_block {
+        anyhow::bail!("Public input mismatch: chain_anchor_block");
+    }
+    if proof_public_inputs.chain_anchor_hash != expected_public_inputs.chain_anchor_hash {
+        anyhow::bail!("Public input mismatch: chain_anchor_hash");
     }
 
     let (_pk, vk) = client.setup(EVM_VERIFIER_ELF);

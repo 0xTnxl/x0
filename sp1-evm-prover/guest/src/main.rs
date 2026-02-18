@@ -429,6 +429,16 @@ fn rlp_encode_u32(value: u32) -> Vec<u8> {
 
 // ============================================================================
 // Merkle-Patricia Trie (MPT) Proof Verification
+//
+// NOTE ON DUPLICATION: The host (artifacts.rs) has a `SimpleMPT` builder and
+// the guest (here) has a `verify_mpt_proof` verifier. They are intentionally
+// separate because the guest runs in a `no_std` SP1 zkVM environment and
+// cannot share crates with the host. The two implementations stay consistent
+// via the host-side cross-validation in `construct_proofs`: after building the
+// trie with `SimpleMPT`, the host recomputes the root and asserts it equals
+// the block header's `transactions_root` / `receipts_root` before the witness
+// is submitted to the prover. Any divergence in encoding would be caught at
+// proof-generation time, not silently at verification.
 // ============================================================================
 
 /// Verify a Merkle-Patricia Trie proof
@@ -603,7 +613,11 @@ fn decode_compact_path(data: &[u8]) -> (bool, Vec<u8>) {
 ///
 /// Returns (status, logs_rlp_bytes)
 fn parse_receipt(receipt_rlp: &[u8]) -> (u8, Vec<u8>) {
-    let data = if !receipt_rlp.is_empty() && receipt_rlp[0] <= 0x03 {
+    // Use the same consistent rule as rlp_decode_list: any single byte
+    // below the RLP string range (< 0x80, non-zero) is an EIP-2718 type
+    // prefix. This handles type 0x01, 0x02, 0x03, 0x04 (EIP-7702) and
+    // any future typed receipt without needing to enumerate every type.
+    let data = if !receipt_rlp.is_empty() && receipt_rlp[0] < 0x80 && receipt_rlp[0] != 0x00 {
         // Typed receipt: skip type byte
         &receipt_rlp[1..]
     } else {

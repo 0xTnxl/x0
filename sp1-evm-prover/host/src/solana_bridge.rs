@@ -157,24 +157,21 @@ impl SolanaBridgeClient {
         Ok((state.trusted_anchor_block, state.trusted_anchor_hash))
     }
 
-    /// Check the age of the current anchor and warn if stale
+    /// Check the age of the current anchor and warn if stale.
     ///
-    /// # Arguments
-    /// * `bridge_program_id` - The x0-bridge program ID
-    /// * `latest_l2_block` - The latest Base L2 block number
+    /// Accepts the already-fetched `anchor_block` to avoid a redundant
+    /// second RPC round-trip to the Solana PDA (caller already holds it).
     ///
     /// # Security Note
     ///
     /// Stale anchors increase chain proof length (more circuit constraints,
     /// higher proving cost). We warn but don't fail — governance is
     /// responsible for timely anchor updates.
-    pub async fn check_anchor_staleness(
+    pub fn check_anchor_staleness(
         &self,
-        bridge_program_id: &Pubkey,
+        anchor_block: u64,
         latest_l2_block: u64,
-    ) -> Result<()> {
-        let (anchor_block, _) = self.fetch_trusted_anchor(bridge_program_id).await?;
-
+    ) {
         let anchor_age = latest_l2_block.saturating_sub(anchor_block);
 
         // Warn if anchor is more than 6 hours old (on Base: ~10,800 blocks)
@@ -191,8 +188,6 @@ impl SolanaBridgeClient {
         } else {
             tracing::debug!("Anchor age OK: {} blocks", anchor_age);
         }
-
-        Ok(())
     }
 }
 
