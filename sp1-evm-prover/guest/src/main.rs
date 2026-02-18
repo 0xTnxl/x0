@@ -327,8 +327,10 @@ fn rlp_decode_list(data: &[u8]) -> Vec<&[u8]> {
         return items;
     }
 
-    // Check for typed transaction/receipt prefix (0x01, 0x02, 0x03)
-    let start = if data[0] <= 0x03 {
+    // Check for typed transaction/receipt prefix (EIP-2718: any byte < 0x80 and != 0x00
+    // is a transaction type byte, covering EIP-2930 (0x01), EIP-1559 (0x02),
+    // EIP-4844 (0x03), EIP-7702 (0x04), and future types)
+    let start = if data[0] < 0x80 && data[0] != 0x00 {
         1 // Skip type byte
     } else {
         0
@@ -448,10 +450,19 @@ fn verify_mpt_proof(
         return false;
     }
 
-    // Verify the root node hash matches
-    let first_node_hash = keccak256(&proof_nodes[0]);
-    if first_node_hash != *root {
-        return false;
+    // Verify the root node matches. For nodes < 32 bytes (inline nodes),
+    // Ethereum embeds them directly rather than their keccak256 hash.
+    // Comparing the hash of a short node would always fail for such tries.
+    if proof_nodes[0].len() < 32 {
+        // Inline root: compare raw content to root bytes
+        if proof_nodes[0].as_slice() != root.as_slice() {
+            return false;
+        }
+    } else {
+        let first_node_hash = keccak256(&proof_nodes[0]);
+        if first_node_hash != *root {
+            return false;
+        }
     }
 
     // Convert key to nibbles for trie traversal

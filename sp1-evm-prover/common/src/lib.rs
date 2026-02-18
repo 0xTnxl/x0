@@ -40,8 +40,8 @@ pub struct EVMProofPublicInputs {
     pub from: [u8; 20],
     /// Transaction recipient/contract (20-byte EVM address)
     pub to: [u8; 20],
-    /// ETH value transferred (in wei)
-    pub value: u64,
+    /// ETH value transferred (in wei, u128 to support >18 ETH without truncation)
+    pub value: u128,
     /// Whether the transaction was successful (receipt.status == 1)
     pub success: bool,
     /// Extracted event logs from the receipt
@@ -109,8 +109,8 @@ pub struct EVMProofWitness {
     pub from: [u8; 20],
     /// Transaction recipient
     pub to: [u8; 20],
-    /// ETH value transferred
-    pub value: u64,
+    /// ETH value transferred (u128 to support >18 ETH without truncation)
+    pub value: u128,
 
     /// Chain proof: consecutive block headers from a trusted anchor to
     /// the target block. The circuit verifies cryptographic continuity
@@ -160,7 +160,7 @@ pub struct EVMProofWitness {
 /// # Size
 ///
 /// Variable length: `target_block - anchor_block + 1` headers.
-/// Bounded by `MAX_CHAIN_PROOF_DEPTH` (256 blocks ≈ 128 KB).
+/// Bounded by `MAX_CHAIN_PROOF_DEPTH` (1024 blocks ≈ 512 KB).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChainProof {
     /// Consecutive block headers from anchor (index 0) to target (last).
@@ -270,15 +270,15 @@ pub const MAX_BLOCK_HEADER_RLP_SIZE: usize = 2048;
 
 /// Maximum chain proof depth (number of consecutive block headers).
 ///
-/// On Base (2-second blocks), 256 blocks ≈ 8.5 minutes.
+/// On Base (2-second blocks), 1024 blocks ≈ 34 minutes.
 /// The trusted anchor on Solana must be updated at least this frequently.
 ///
 /// The chain proof includes headers[0] (anchor) through headers[N-1] (target),
-/// so a depth of 256 means the target can be at most 255 blocks ahead of
+/// so a depth of 1024 means the target can be at most 1023 blocks ahead of
 /// the anchor.
 ///
-/// Total overhead: 256 × ~500 bytes ≈ 128 KB (acceptable for STARK witness).
-pub const MAX_CHAIN_PROOF_DEPTH: usize = 256;
+/// Total overhead: 1024 × ~500 bytes ≈ 512 KB (acceptable for STARK witness).
+pub const MAX_CHAIN_PROOF_DEPTH: usize = 1024;
 
 /// Maximum allowed RLP size for a single transaction (bytes).
 ///

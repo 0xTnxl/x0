@@ -32,12 +32,26 @@ pub struct SolanaBridgeClient {
     rpc: RpcClient,
 }
 
+/// Version discriminant for `BridgeState` schema.
+///
+/// Increment this whenever the `BridgeState` struct layout changes.
+/// The Solana program must write this value as the first byte of the
+/// account data. The prover asserts it on deserialization to catch
+/// silent data corruption after on-chain upgrades.
+pub const BRIDGE_STATE_VERSION: u8 = 1;
+
 /// Bridge state account structure
 ///
 /// Must match the BorshDeserialize layout in the Solana program:
 /// `programs/x0-bridge/src/state.rs`
 #[derive(Debug, Clone, BorshDeserialize)]
 pub struct BridgeState {
+    /// Schema version discriminant — must equal `BRIDGE_STATE_VERSION`.
+    ///
+    /// This is the first serialized field. A mismatch aborts the prover
+    /// immediately, preventing silent mis-reads of governance-critical data
+    /// after on-chain program upgrades.
+    pub version: u8,
     /// Bump seed for PDA derivation
     #[allow(dead_code)]
     pub bump: u8,
@@ -114,6 +128,17 @@ impl SolanaBridgeClient {
             )
         })?;
 
+        // Verify schema version — catches silent layout changes after on-chain upgrades
+        if state.version != BRIDGE_STATE_VERSION {
+            bail!(
+                "BridgeState version mismatch: on-chain version={}, expected={}. \
+                 The Solana program may have been upgraded with an incompatible \
+                 state layout. Update BRIDGE_STATE_VERSION and the struct fields.",
+                state.version,
+                BRIDGE_STATE_VERSION,
+            );
+        }
+
         tracing::info!(
             "✓ Fetched trusted anchor from Solana: block={}, hash=0x{}, updated_at={}",
             state.trusted_anchor_block,
@@ -157,7 +182,7 @@ impl SolanaBridgeClient {
 
         if anchor_age > MAX_REASONABLE_ANCHOR_AGE {
             tracing::warn!(
-                "⚠ Trusted anchor is {} blocks old (>{} threshold). \
+                "Trusted anchor is {} blocks old (>{} threshold). \
                  Chain proofs will be longer and more expensive. \
                  Governance should update the anchor soon.",
                 anchor_age,

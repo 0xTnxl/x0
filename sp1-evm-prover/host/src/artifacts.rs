@@ -7,6 +7,7 @@ use alloy_primitives::{B256, U256};
 use alloy_rpc_types::{Block, TransactionReceipt};
 use alloy_consensus::TxType;
 use anyhow::{anyhow, bail, Context, Result};
+use futures::future::join_all;
 use tiny_keccak::{Hasher, Keccak};
 use x0_sp1_evm_common::{
     EVMProofWitness, ChainProof, BlockHeaderRLP, MAX_CHAIN_PROOF_DEPTH,
@@ -134,10 +135,10 @@ pub async fn fetch_evm_artifacts(
     tracing::debug!("Constructing Merkle-Patricia Trie proofs");
 
     // Use first RPC URL for raw transaction fetching (if needed)
-    let rpc_url_for_raw = rpc_urls.first().unwrap();
+    // (now handled via ConsensusProvider.fetch_raw_tx_consensus)
 
     let (block_header_rlp, tx_rlp, receipt_rlp, tx_proof_nodes, receipt_proof_nodes) =
-        construct_proofs(&provider, rpc_url_for_raw, &block, tx_index as u32, &receipt)
+        construct_proofs(&provider, &block, tx_index as u32, &receipt)
             .await
             .context("Failed to construct MPT proofs")?;
 
@@ -147,7 +148,7 @@ pub async fn fetch_evm_artifacts(
         tx.to
             .unwrap_or_default(),
     );
-    let value = tx.value.to::<u64>();
+    let value = tx.value.to::<u128>();
 
     // Verify block header hash
     let computed_hash = keccak256(&block_header_rlp);
@@ -200,7 +201,6 @@ pub async fn fetch_evm_artifacts(
 
     let chain_proof = fetch_chain_proof(
         &provider,
-        "",  // rpc_url not used in fetch_chain_proof
         anchor_block,
         block_number,
         &block,
@@ -242,7 +242,6 @@ pub async fn fetch_evm_artifacts(
 /// - Each header is RLP-encoded and its hash is computed for validation
 async fn fetch_chain_proof(
     provider: &ConsensusProvider,
-    _rpc_url: &str,
     anchor_block: u64,
     target_block: u64,
     target_block_data: &Block,
@@ -250,44 +249,58 @@ async fn fetch_chain_proof(
     let chain_len = (target_block - anchor_block + 1) as usize;
     let mut headers: Vec<BlockHeaderRLP> = Vec::with_capacity(chain_len);
 
-    // Fetch all blocks from anchor to target-1 (target is already fetched)
-    for block_num in anchor_block..target_block {
-        let block = provider
-            .get_block_by_number_consensus(block_num.into(), false)
-            .await
-            .with_context(|| format!("Failed to fetch block {} via consensus", block_num))?
-            .ok_or_else(|| anyhow!("Block {} not found", block_num))?;
+    // Fetch all blocks from anchor to target-1 in parallel batches of 32.
+    // Batching avoids opening too many concurrent connections while still
+    // being far faster than the sequential approach.
+    const BATCH_SIZE: usize = 32;
+    let block_nums: Vec<u64> = (anchor_block..target_block).collect();
 
-        let rlp = rlp_encode_block_header(&block)?;
-        let parent_hash = block.header.parent_hash.0;
-        let number = block.header.number;
+    for batch in block_nums.chunks(BATCH_SIZE) {
+        let batch_futures: Vec<_> = batch
+            .iter()
+            .map(|&block_num| {
+                let provider = provider;
+                async move {
+                    let block = provider
+                        .get_block_by_number_consensus(block_num.into(), false)
+                        .await
+                        .with_context(|| {
+                            format!("Failed to fetch block {} via consensus", block_num)
+                        })?
+                        .ok_or_else(|| anyhow!("Block {} not found", block_num))?;
+                    let rlp = rlp_encode_block_header(&block)?;
+                    let parent_hash = block.header.parent_hash.0;
+                    let number = block.header.number;
+                    let computed = keccak256(&rlp);
+                    let expected = block.header.hash.0;
+                    if computed != expected {
+                        bail!(
+                            "Block {} header RLP hash mismatch: computed={} expected={}",
+                            block_num,
+                            hex::encode(computed),
+                            hex::encode(expected),
+                        );
+                    }
+                    Ok::<BlockHeaderRLP, anyhow::Error>(BlockHeaderRLP {
+                        rlp_encoded: rlp,
+                        number,
+                        parent_hash,
+                    })
+                }
+            })
+            .collect();
 
-        // Sanity: verify RLP hashes to the expected block hash
-        let computed = keccak256(&rlp);
-        let expected = block.header.hash.0;
-        if computed != expected {
-            bail!(
-                "Block {} header RLP hash mismatch: computed={} expected={}",
-                block_num,
-                hex::encode(computed),
-                hex::encode(expected),
-            );
+        let batch_results = join_all(batch_futures).await;
+        for result in batch_results {
+            headers.push(result?);
         }
 
-        headers.push(BlockHeaderRLP {
-            rlp_encoded: rlp,
-            number,
-            parent_hash,
-        });
-
-        if block_num % 50 == 0 || block_num == anchor_block {
-            tracing::debug!(
-                "Fetched chain header {}/{} (block {})",
-                headers.len(),
-                chain_len,
-                block_num,
-            );
-        }
+        tracing::debug!(
+            "Fetched chain headers {}/{} (up to block {})",
+            headers.len(),
+            chain_len - 1, // -1 because target is added separately
+            batch.last().copied().unwrap_or(anchor_block),
+        );
     }
 
     // Add the target block (already fetched and RLP-encoded by the caller)
@@ -328,7 +341,6 @@ async fn fetch_chain_proof(
 /// the trie locally.
 async fn construct_proofs(
     provider: &ConsensusProvider,
-    rpc_url: &str,
     block: &Block,
     tx_index: u32,
     receipt: &TransactionReceipt,
@@ -352,11 +364,11 @@ async fn construct_proofs(
             Ok(rlp) if !rlp.is_empty() => rlp,
             Ok(_) | Err(_) => {
                 tracing::debug!(
-                    "Fetching raw bytes for tx {} (type {:?})",
+                    "Fetching raw bytes for tx {} (type {:?}) via consensus RPCs",
                     tx.hash,
                     tx.transaction_type
                 );
-                fetch_raw_tx(rpc_url, tx.hash)
+                provider.fetch_raw_tx_consensus(tx.hash)
                     .await
                     .with_context(|| format!(
                         "Failed to fetch raw bytes for tx {}",
@@ -368,6 +380,28 @@ async fn construct_proofs(
     }
 
     let tx_proof_nodes = build_mpt_proof(&tx_rlps, tx_index as usize)?;
+
+    // Host-side MPT cross-validation: rebuild the trie and verify its root
+    // matches the transactions_root in the block header. This catches any
+    // encoding bugs before committing a mismatched witness to the STARK circuit.
+    {
+        let mut tx_trie = SimpleMPT::new();
+        for (idx, rlp) in tx_rlps.iter().enumerate() {
+            let key = rlp_encode_u32_key(idx as u32);
+            tx_trie.insert(&key, rlp.clone());
+        }
+        let computed_tx_root = tx_trie.compute_root();
+        let expected_tx_root: [u8; 32] = block.header.transactions_root.0;
+        if computed_tx_root != expected_tx_root {
+            bail!(
+                "Transaction trie root mismatch: computed={} expected={} — \
+                 RLP encoding of one or more transactions is incorrect.",
+                hex::encode(computed_tx_root),
+                hex::encode(expected_tx_root),
+            );
+        }
+        tracing::debug!("Transaction trie root verified: 0x{}", hex::encode(computed_tx_root));
+    };
     let target_tx_rlp = tx_rlps
         .get(tx_index as usize)
         .ok_or_else(|| anyhow!("Transaction index {} out of range", tx_index))?
@@ -386,6 +420,27 @@ async fn construct_proofs(
         .collect::<Result<Vec<_>>>()?;
 
     let receipt_proof_nodes = build_mpt_proof(&receipt_rlps, tx_index as usize)?;
+
+    // Host-side MPT cross-validation for receipts: verify receipt trie root
+    // matches the receipts_root in the block header.
+    {
+        let mut receipt_trie = SimpleMPT::new();
+        for (idx, rlp) in receipt_rlps.iter().enumerate() {
+            let key = rlp_encode_u32_key(idx as u32);
+            receipt_trie.insert(&key, rlp.clone());
+        }
+        let computed_receipt_root = receipt_trie.compute_root();
+        let expected_receipt_root: [u8; 32] = block.header.receipts_root.0;
+        if computed_receipt_root != expected_receipt_root {
+            bail!(
+                "Receipt trie root mismatch: computed={} expected={} — \
+                 RLP encoding of one or more receipts is incorrect.",
+                hex::encode(computed_receipt_root),
+                hex::encode(expected_receipt_root),
+            );
+        }
+        tracing::debug!("Receipt trie root verified: 0x{}", hex::encode(computed_receipt_root));
+    };
     let target_receipt_rlp = receipt_rlps
         .get(tx_index as usize)
         .ok_or_else(|| anyhow!("Receipt index {} out of range", tx_index))?
@@ -604,8 +659,9 @@ fn signature_y_parity(sig: &alloy_rpc_types::Signature) -> u8 {
         match v {
             0 | 27 => 0,
             1 | 28 => 1,
-            // EIP-155: v = chain_id * 2 + 35 (even) or chain_id * 2 + 36 (odd)
-            _ => ((v + 1) % 2) as u8,
+            // EIP-155: v = chain_id * 2 + 35 (even parity) or chain_id * 2 + 36 (odd parity)
+            // Correct formula: parity = (v - 35) % 2
+            _ => ((v - 35) % 2) as u8,
         }
     }
 }
@@ -667,46 +723,6 @@ fn validate_tx_type(tx_type: Option<u8>) -> Result<()> {
             t
         ),
     }
-}
-
-/// Fetch raw transaction bytes via JSON-RPC `eth_getRawTransactionByHash`.
-///
-/// This is used as a fallback for transaction types that can't be manually
-/// RLP-encoded from the parsed Transaction struct (e.g., OP Stack deposit
-/// transactions which have non-standard fields like sourceHash).
-async fn fetch_raw_tx(rpc_url: &str, tx_hash: B256) -> Result<Vec<u8>> {
-    let client = reqwest::Client::new();
-    let body = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "eth_getRawTransactionByHash",
-        "params": [format!("0x{}", hex::encode(tx_hash.0))],
-        "id": 1
-    });
-
-    let resp = client
-        .post(rpc_url)
-        .json(&body)
-        .send()
-        .await
-        .context("RPC request failed")?;
-
-    let result: serde_json::Value = resp
-        .json()
-        .await
-        .context("Failed to parse RPC response")?;
-
-    let hex_str = result["result"]
-        .as_str()
-        .context("eth_getRawTransactionByHash returned null")?;
-
-    let raw = hex::decode(hex_str.strip_prefix("0x").unwrap_or(hex_str))
-        .context("Invalid hex in raw transaction")?;
-
-    if raw.is_empty() {
-        bail!("eth_getRawTransactionByHash returned empty bytes");
-    }
-
-    Ok(raw)
 }
 
 /// RLP-encode a transaction receipt
@@ -1148,6 +1164,15 @@ impl SimpleMPT {
         let mut proof = Vec::new();
         Self::collect_proof(&self.root, &nibbles, &mut proof)?;
         Ok(proof)
+    }
+
+    /// Compute the Merkle root of this trie.
+    ///
+    /// For Ethereum block headers, `transactions_root` and `receipts_root`
+    /// are always `keccak256(RLP(root_node))` regardless of trie size.
+    fn compute_root(&self) -> [u8; 32] {
+        let root_rlp = Self::rlp_encode_node(&self.root);
+        keccak256(&root_rlp)
     }
 
     fn collect_proof(

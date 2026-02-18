@@ -29,6 +29,7 @@ use alloy_transport_http::Http;
 use anyhow::{anyhow, bail, Context, Result};
 use reqwest::Client;
 use std::collections::HashMap;
+use std::time::Duration;
 
 /// Multi-RPC provider with Byzantine consensus
 pub struct ConsensusProvider {
@@ -38,6 +39,8 @@ pub struct ConsensusProvider {
     min_consensus: usize,
     /// RPC endpoint URLs (for logging)
     urls: Vec<String>,
+    /// Shared HTTP client (connection pooling — avoids creating a new client per request)
+    http_client: reqwest::Client,
 }
 
 impl ConsensusProvider {
@@ -82,6 +85,10 @@ impl ConsensusProvider {
             providers,
             min_consensus,
             urls: rpc_urls,
+            http_client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .context("Failed to build shared HTTP client")?,
         })
     }
 
@@ -536,6 +543,164 @@ impl ConsensusProvider {
 
         Ok(agreeing_receipts[0].1.clone())
     }
+
+    /// Fetch a raw transaction by hash with consensus verification.
+    ///
+    /// Calls `eth_getRawTransactionByHash` on all configured RPCs and
+    /// requires byte-identical results from at least `min_consensus` RPCs.
+    /// This is critical for OP Stack deposit transactions (type 0x7E) and
+    /// any future transaction type that alloy's typed encoding may not
+    /// support — the raw bytes are the ground truth committed to the MPT.
+    pub async fn fetch_raw_tx_consensus(&self, tx_hash: B256) -> Result<Vec<u8>> {
+        tracing::debug!(
+            "Fetching raw tx {} with consensus (all RPCs)",
+            hex::encode(tx_hash.0)
+        );
+
+        let mut results: Vec<(usize, Vec<u8>)> = Vec::new();
+        let mut errors: Vec<(usize, String)> = Vec::new();
+
+        // Query all RPCs in parallel using the shared HTTP client
+        let mut handles = Vec::new();
+        for (i, url) in self.urls.iter().enumerate() {
+            let url = url.clone();
+            let client = self.http_client.clone();
+            let tx_hash_hex = format!("0x{}", hex::encode(tx_hash.0));
+            let handle = tokio::spawn(async move {
+                with_retry(
+                    || {
+                        let client = client.clone();
+                        let url = url.clone();
+                        let tx_hash_hex = tx_hash_hex.clone();
+                        async move {
+                            let body = serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "method": "eth_getRawTransactionByHash",
+                                "params": [tx_hash_hex],
+                                "id": 1
+                            });
+                            let resp = client
+                                .post(&url)
+                                .json(&body)
+                                .send()
+                                .await
+                                .context("HTTP request failed")?;
+                            let json: serde_json::Value = resp
+                                .json()
+                                .await
+                                .context("JSON parse failed")?;
+                            let raw_hex = json["result"]
+                                .as_str()
+                                .ok_or_else(|| anyhow!(
+                                    "eth_getRawTransactionByHash returned null — \
+                                     tx not found or node does not support this method"
+                                ))?;
+                            let raw = hex::decode(raw_hex.trim_start_matches("0x"))
+                                .context("Hex decode of raw tx failed")?;
+                            Ok(raw)
+                        }
+                    },
+                    2, // max retries
+                )
+                .await
+            });
+            handles.push((i, handle));
+        }
+
+        for (i, handle) in handles {
+            match handle.await {
+                Ok(Ok(raw)) => results.push((i, raw)),
+                Ok(Err(e)) => errors.push((i, e.to_string())),
+                Err(e) => errors.push((i, format!("task join error: {}", e))),
+            }
+        }
+
+        if results.len() < self.min_consensus {
+            let error_details: Vec<String> = errors
+                .iter()
+                .map(|(i, e)| format!("RPC[{}] ({}): {}", i, self.urls[*i], e))
+                .collect();
+            bail!(
+                "Insufficient RPC responses for raw tx {}: got {}, need {}.\nErrors:\n{}",
+                hex::encode(tx_hash.0),
+                results.len(),
+                self.min_consensus,
+                error_details.join("\n")
+            );
+        }
+
+        // All byte-identical responses count; any divergence is logged as a security alert
+        let reference = &results[0].1;
+        let mut agreeing = vec![results[0].0];
+        for (i, raw) in &results[1..] {
+            if raw == reference {
+                agreeing.push(*i);
+            } else {
+                tracing::error!(
+                    "RPC[{}] ({}) returned DIFFERENT raw tx bytes for {}! \
+                     Expected {} bytes, got {} bytes. Possible RPC manipulation.",
+                    i,
+                    self.urls[*i],
+                    hex::encode(tx_hash.0),
+                    reference.len(),
+                    raw.len(),
+                );
+            }
+        }
+
+        if agreeing.len() < self.min_consensus {
+            bail!(
+                "RAW TX CONSENSUS FAILURE for {}: only {} RPCs agreed on bytes, need {}",
+                hex::encode(tx_hash.0),
+                agreeing.len(),
+                self.min_consensus
+            );
+        }
+
+        tracing::debug!(
+            "Raw tx {} consensus: {}/{} RPCs agreed ({} bytes)",
+            hex::encode(tx_hash.0),
+            agreeing.len(),
+            self.providers.len(),
+            reference.len(),
+        );
+
+        Ok(reference.clone())
+    }
+}
+
+/// Retry an async operation with exponential backoff.
+///
+/// Retries up to `max_retries` times on transient errors.
+/// Delays: 500 ms after attempt 1, 1000 ms after attempt 2, etc.
+async fn with_retry<F, Fut, T>(mut f: F, max_retries: usize) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let mut last_err = anyhow!("no attempts made");
+    let mut delay_ms = 500u64;
+
+    for attempt in 0..=max_retries {
+        match f().await {
+            Ok(val) => return Ok(val),
+            Err(e) => {
+                last_err = e;
+                if attempt < max_retries {
+                    tracing::warn!(
+                        "Transient RPC error (attempt {}/{}): {}. Retrying in {}ms...",
+                        attempt + 1,
+                        max_retries + 1,
+                        last_err,
+                        delay_ms,
+                    );
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                    delay_ms *= 2;
+                }
+            }
+        }
+    }
+    Err(last_err)
 }
 
 #[cfg(test)]
