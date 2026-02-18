@@ -21,11 +21,7 @@
 //! The generated proof can then be submitted to the x0-bridge program
 //! on Solana via the `verify_evm_proof` instruction.
 
-mod artifacts;
-mod prover;
-mod multi_rpc;
-mod l1_finality;
-mod solana_bridge;
+use x0_sp1_evm_host::{artifacts, multi_rpc, prover, solana_bridge};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};

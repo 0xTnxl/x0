@@ -26,8 +26,14 @@ build-guest:
 	@echo "  Building SP1 guest program..."
 	@echo "══════════════════════════════════════════════════════"
 	cd guest && cargo prove build
-	@echo "Guest ELF: guest/elf/solana-state-verifier"
-	@ls -la guest/elf/solana-state-verifier 2>/dev/null || echo "  (not yet built)"
+	@ELF=target/elf-compilation/riscv64im-succinct-zkvm-elf/release/solana-state-verifier; \
+	 if [ -f "$$ELF" ]; then \
+	   mkdir -p guest/elf; \
+	   cp $$ELF guest/elf/solana-state-verifier; \
+	   echo "Guest ELF copied to guest/elf/solana-state-verifier ($$(wc -c < guest/elf/solana-state-verifier) bytes)"; \
+	 else \
+	   echo "WARNING: ELF not found at $$ELF"; \
+	 fi
 
 ## Build the host binary (release mode)
 build-host:
@@ -71,25 +77,33 @@ clippy:
 # Proof Generation
 # ============================================================================
 
-## Generate a mock proof (for testing without real SP1 proving)
-## Usage: make mock-proof BRIDGE_PROGRAM_ID=<id> NONCE=<n>
+## Generate a mock proof using the SP1 mock prover (no ZK overhead, ~seconds)
+##
+## Required env vars:
+##   BRIDGE_PROGRAM_ID  x0-bridge program ID on Solana
+##
+## Optional env vars:
+##   SOLANA_RPC_URL       Solana RPC endpoint (default: devnet)
+##   NONCE                BridgeOutMessage nonce to prove (default: 0)
+##   QUORUM_TIMEOUT_SECS  Max wait for quorum (default: 120)
+##   SKIP_QUORUM_WAIT=1   Skip quorum enforcement
+##   OUTPUT_PROOF         Output proof file (default: mock_proof.bin)
+##   OUTPUT_PUBLIC_VALUES Output public values file (default: mock_public_values.bin)
+##
+## Example:
+##   SOLANA_RPC_URL=https://api.devnet.solana.com \
+##   BRIDGE_PROGRAM_ID=4FuyK... \
+##   NONCE=0 \
+##   SKIP_QUORUM_WAIT=1 \
+##   make mock-proof
 mock-proof:
 ifndef BRIDGE_PROGRAM_ID
-	$(error BRIDGE_PROGRAM_ID is required. Usage: make mock-proof BRIDGE_PROGRAM_ID=<id> NONCE=<n>)
+	$(error BRIDGE_PROGRAM_ID is required)
 endif
-ifndef NONCE
-	$(error NONCE is required. Usage: make mock-proof BRIDGE_PROGRAM_ID=<id> NONCE=<n>)
-endif
-	@echo "Generating mock proof for nonce $(NONCE)..."
-	RUST_LOG=info cargo run -p x0-sp1-solana-host --release -- \
-		--rpc-url $${SOLANA_RPC_URL:-https://api.devnet.solana.com} \
-		--bridge-program $(BRIDGE_PROGRAM_ID) \
-		--nonce $(NONCE) \
-		--mode mock \
-		--output proof.bin \
-		--public-values-output public_values.bin
-	@echo "Proof:  proof.bin ($$(wc -c < proof.bin) bytes)"
-	@echo "PubVal: public_values.bin ($$(wc -c < public_values.bin) bytes)"
+	@echo "Generating mock proof for BRIDGE_PROGRAM_ID=$(BRIDGE_PROGRAM_ID) NONCE=$${NONCE:-0}..."
+	RUST_LOG=info cargo run -p x0-sp1-solana-host --example mock_proof --release
+	@[ -f mock_proof.bin ] && echo "Proof:  mock_proof.bin ($$(wc -c < mock_proof.bin) bytes)" || true
+	@[ -f mock_public_values.bin ] && echo "PubVal: mock_public_values.bin ($$(wc -c < mock_public_values.bin) bytes)" || true
 
 ## Generate a real compressed proof via SP1 network
 network-proof:
