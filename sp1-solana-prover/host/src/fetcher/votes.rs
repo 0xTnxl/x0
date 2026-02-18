@@ -146,31 +146,50 @@ fn try_parse_vote_transaction(
     None
 }
 
-/// Search vote instruction data for the target bank hash
+/// Search vote instruction data for the target bank hash.
 ///
 /// The bank hash appears as a 32-byte field within the vote instruction data.
 /// Different vote instruction variants place it at different offsets, but it's
 /// always preceded by the lockouts/root data and followed by an optional timestamp.
 ///
-/// Rather than parsing the exact variant, we scan for the 32-byte hash within
-/// the instruction data. Given SHA-256 collision resistance, a false positive
-/// (finding the hash at a wrong offset) has probability 2^{-256}.
+/// We scan for the 32-byte hash within the instruction data, starting after
+/// the 4-byte variant discriminator.
+///
+/// # Ambiguity Rejection
+///
+/// If the target 32-byte sequence appears at **more than one** position in the
+/// data, the result is ambiguous — we cannot determine which occurrence is the
+/// canonical bank hash field vs. coincidental overlap with lockout data.
+/// In that case we return `None` and the vote is silently skipped.
+///
+/// Given SHA-256 preimage resistance, true ambiguity (two legitimate hash fields
+/// with the same value in one vote instruction) is negligible in practice, but
+/// handling it explicitly keeps the witness assembler conservative and safe.
 fn find_bank_hash_in_vote_data(data: &[u8], target: &[u8; 32]) -> Option<usize> {
     if data.len() < 36 {
         // Minimum: 4-byte variant tag + 32-byte hash
         return None;
     }
 
-    // Scan through the instruction data looking for the 32-byte hash
-    // Start after the 4-byte variant discriminator
+    let mut found_offset: Option<usize> = None;
+
+    // Scan through the instruction data looking for the 32-byte hash.
+    // Start after the 4-byte variant discriminator.
     for offset in 4..=(data.len().saturating_sub(32)) {
         if &data[offset..offset + 32] == target {
-            trace!("Found bank hash at offset {} in vote instruction data", offset);
-            return Some(offset);
+            if found_offset.is_some() {
+                // Hash appears at more than one offset — ambiguous; reject.
+                // A legitimate vote instruction contains the bank hash exactly once.
+                trace!(
+                    "Ambiguous bank hash match in vote data (appears at multiple offsets) — skipping"
+                );
+                return None;
+            }
+            found_offset = Some(offset);
         }
     }
 
-    None
+    found_offset
 }
 
 /// Convert parsed votes to ValidatorVote structs for the witness

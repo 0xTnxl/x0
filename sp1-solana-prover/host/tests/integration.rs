@@ -338,6 +338,7 @@ fn test_end_to_end_witness_assembly() {
             &pda,
             &account,
             false, // don't require quorum for integration tests
+            30,    // quorum_timeout_secs (unused when require_quorum=false)
         )
         .await
     });

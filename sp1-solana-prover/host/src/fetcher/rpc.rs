@@ -476,10 +476,19 @@ pub fn count_block_signatures(block: &UiConfirmedBlock) -> u64 {
         };
         let sig_offset = bytes_read + num_sigs * 64;
 
-        // Message header starts here: first byte is num_required_signatures
+        // Message header starts here: first byte is num_required_signatures.
+        // V0 versioned transactions prefix the message with 0x80 — skip it
+        // to reach the actual 3-byte message header.
         if sig_offset < raw.len() {
-            let num_required_sigs = raw[sig_offset] as u64;
-            total_sigs += num_required_sigs;
+            let header_start = if raw[sig_offset] == 0x80 {
+                sig_offset + 1
+            } else {
+                sig_offset
+            };
+            if header_start < raw.len() {
+                let num_required_sigs = raw[header_start] as u64;
+                total_sigs += num_required_sigs;
+            }
         }
     }
 
@@ -678,6 +687,14 @@ fn extract_writable_keys(
     let (num_sigs, bytes_read) = super::tx_parser::read_compact_u16(&raw, offset)?;
     offset += bytes_read;
     offset += num_sigs * 64; // Skip signatures
+
+    // Skip V0 versioned message prefix byte (0x80) if present.
+    // V0 transactions prefix the message with 0x80 to signal the versioned format.
+    // The 3-byte message header (num_required_sigs, num_readonly_signed,
+    // num_readonly_unsigned) follows immediately after the prefix byte.
+    if offset < raw.len() && raw[offset] == 0x80 {
+        offset += 1;
+    }
 
     // Parse message header
     if offset + 3 > raw.len() {

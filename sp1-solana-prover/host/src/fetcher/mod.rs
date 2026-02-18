@@ -111,6 +111,8 @@ pub trait SlotStateProvider {
 /// * `bridge_program` - x0-bridge program ID
 /// * `pda` - BridgeOutMessage PDA address
 /// * `account` - Pre-fetched account data (for the PDA)
+/// * `require_quorum` - When true, block until ≥ 2/3 stake attests (or timeout)
+/// * `quorum_timeout_secs` - Maximum seconds to wait for quorum when `require_quorum=true`
 ///
 /// # Returns
 /// Complete `SolanaProofWitness` ready for SP1 proof generation
@@ -120,6 +122,7 @@ pub async fn fetch_witness(
     pda: &Pubkey,
     account: &Account,
     require_quorum: bool,
+    quorum_timeout_secs: u64,
 ) -> Result<SolanaProofWitness> {
     info!("=== Fetching SP1 Proof Witness ===");
     info!("BridgeOutMessage PDA: {}", pda);
@@ -133,6 +136,16 @@ pub async fn fetch_witness(
     let slot = rpc::get_account_creation_slot(rpc, pda)
         .context("Failed to find creation slot for BridgeOutMessage")?;
     info!("BridgeOutMessage created at slot {}", slot);
+
+    // Guard against slot 0: the genesis slot has no parent, so parent_bank_hash
+    // cannot be resolved and the circuit would abort. A BridgeOutMessage created
+    // at slot 0 would be pathological; bail with a clear diagnostic.
+    if slot == 0 {
+        anyhow::bail!(
+            "BridgeOutMessage PDA was created at slot 0 (genesis). \
+             The genesis slot has no parent bank hash and cannot be proven."
+        );
+    }
 
     // Reject epoch-boundary slots — Solana mixes epoch_accounts_hash into the
     // bank hash preimage on the first slot of each epoch, adding a 5th component
@@ -337,9 +350,9 @@ pub async fn fetch_witness(
     }
 
     // Convert to ValidatorVote structs with stake info
-    let validator_votes = votes::to_validator_votes(&all_parsed_votes, &vote_accounts);
+    let mut validator_votes = votes::to_validator_votes(&all_parsed_votes, &vote_accounts);
 
-    let confirmed_stake: u64 = validator_votes.iter().map(|v| v.stake).sum();
+    let mut confirmed_stake: u64 = validator_votes.iter().map(|v| v.stake).sum();
     info!(
         "Validator votes: {} total, confirmed stake = {} ({:.1}% of total)",
         validator_votes.len(),
@@ -350,10 +363,43 @@ pub async fn fetch_witness(
     if confirmed_stake * 3 < total_epoch_stake * 2 {
         let pct = (confirmed_stake as f64 / total_epoch_stake as f64) * 100.0;
         if require_quorum {
-            anyhow::bail!(
-                "Insufficient quorum: {:.1}% (need ≥ 66.7%). \
-                 Use --skip-quorum-wait to proceed anyway, or wait for more votes.",
-                pct
+            // Initial scan didn't reach quorum — enter the retry/polling loop.
+            // wait_for_quorum blocks until ≥ 2/3 stake is confirmed or the
+            // timeout expires, then we do a fresh expanded scan to collect the
+            // votes that arrived while we were waiting.
+            info!(
+                "Initial scan: {:.1}% stake confirmed. \
+                 Entering quorum wait loop (timeout: {}s)...",
+                pct, quorum_timeout_secs
+            );
+            rpc::wait_for_quorum(
+                rpc,
+                slot,
+                &bank_hash,
+                &vote_accounts,
+                total_epoch_stake,
+                quorum_timeout_secs,
+            )
+            .context("Quorum wait timed out — slot may not reach finality")?;
+
+            // Quorum is now confirmed. Re-scan with a 2× window to collect
+            // all votes that appeared during the wait period.
+            info!("Quorum confirmed. Re-scanning for votes with expanded window...");
+            let expanded_vote_blocks =
+                rpc::fetch_vote_blocks(rpc, slot + 1, VOTE_LOOKAHEAD_SLOTS * 2)
+                    .context("Failed to fetch vote blocks after quorum wait")?;
+            all_parsed_votes.clear();
+            for (vote_slot, vote_block) in &expanded_vote_blocks {
+                let parsed = votes::extract_votes_for_bank_hash(vote_block, &bank_hash);
+                info!("Slot {}: found {} votes (expanded scan)", vote_slot, parsed.len());
+                all_parsed_votes.extend(parsed);
+            }
+            validator_votes = votes::to_validator_votes(&all_parsed_votes, &vote_accounts);
+            confirmed_stake = validator_votes.iter().map(|v| v.stake).sum();
+            info!(
+                "Post-wait vote collection: {} votes, {:.1}% confirmed stake",
+                validator_votes.len(),
+                (confirmed_stake as f64 / total_epoch_stake as f64) * 100.0
             );
         } else {
             warn!(

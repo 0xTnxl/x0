@@ -184,6 +184,7 @@ async fn main() -> Result<()> {
         &pda,
         &account,
         !args.skip_quorum_wait,
+        args.quorum_timeout_secs,
     )
     .await
     .context("Failed to fetch witness data")?;

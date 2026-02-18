@@ -348,8 +348,16 @@ fn main() {
         );
         assert!(sig_valid, "Vote signature verification failed");
 
-        // 8c. Verify the bank hash appears at the claimed offset
+        // 8c. Verify the bank hash appears at the claimed offset.
+        //     The offset must be ≥ 4 (past the 4-byte vote instruction variant
+        //     discriminator) to prevent a host from pointing at the discriminator
+        //     bytes themselves. It must also fit within the message.
         let offset = vote.bank_hash_offset as usize;
+        assert!(
+            offset >= 4,
+            "bank_hash_offset {} is in the 4-byte variant discriminator region (must be ≥ 4)",
+            offset
+        );
         assert!(
             offset + 32 <= vote.message_bytes.len(),
             "bank_hash_offset {} out of bounds (message len {})",
