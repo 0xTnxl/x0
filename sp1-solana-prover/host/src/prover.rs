@@ -10,13 +10,15 @@ use sp1_sdk::{HashableKey, ProverClient, SP1Stdin};
 use tracing::info;
 use x0_sp1_solana_common::SolanaProofWitness;
 
-/// Path to the SP1 guest ELF binary
+/// Path to the SP1 guest ELF binary.
+///
+/// `cargo prove build` in the guest crate emits the ELF to:
+///   `target/elf-compilation/riscv64im-succinct-zkvm-elf/release/solana-state-verifier`
 ///
 /// Override via the `SP1_GUEST_ELF` environment variable.
-/// Default: `guest/elf/solana-state-verifier` relative to the host crate.
 const DEFAULT_GUEST_ELF_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../guest/elf/solana-state-verifier"
+    "/../target/elf-compilation/riscv64im-succinct-zkvm-elf/release/solana-state-verifier",
 );
 
 fn load_guest_elf() -> Result<Vec<u8>> {

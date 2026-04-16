@@ -7,18 +7,31 @@ use anyhow::{Context, Result};
 use sp1_sdk::{ProverClient, SP1Stdin};
 use x0_sp1_evm_common::{EVMProofPublicInputs, EVMProofWitness};
 
-/// The ELF binary of the SP1 guest program.
+/// Default path to the SP1 guest ELF binary.
 ///
-/// This is embedded at compile time from the guest build output.
-/// To build the guest:
+/// The ELF is produced by `cargo prove build` in the guest crate:
 ///
 /// ```bash
-/// cd sp1-evm-prover/guest
-/// cargo prove build
+/// cd sp1-evm-prover/guest && cargo prove build
 /// ```
 ///
-/// The ELF path is relative to the host crate root.
-const EVM_VERIFIER_ELF: &[u8] = include_bytes!("../../guest/elf/riscv32im-succinct-zkvm-elf");
+/// Override via the `SP1_EVM_GUEST_ELF` env var.
+const DEFAULT_EVM_GUEST_ELF_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../target/elf-compilation/riscv64im-succinct-zkvm-elf/release/evm-verifier",
+);
+
+fn load_evm_guest_elf() -> anyhow::Result<Vec<u8>> {
+    let path = std::env::var("SP1_EVM_GUEST_ELF")
+        .unwrap_or_else(|_| DEFAULT_EVM_GUEST_ELF_PATH.to_string());
+    std::fs::read(&path).with_context(|| {
+        format!(
+            "Failed to read EVM guest ELF from {}. \
+             Build the guest first: cd sp1-evm-prover/guest && cargo prove build",
+            path
+        )
+    })
+}
 
 /// Generate a STARK proof for an EVM transaction
 ///
@@ -41,13 +54,14 @@ pub fn generate_proof(
         .map_err(|e| anyhow::anyhow!(e))
         .context("Witness pre-validation failed — fix inputs before proving")?;
 
+    let guest_elf = load_evm_guest_elf()?;
     let client = ProverClient::new();
 
     let mut stdin = SP1Stdin::new();
     stdin.write(witness);
 
     // Generate the proof
-    let (pk, vk) = client.setup(EVM_VERIFIER_ELF);
+    let (pk, vk) = client.setup(&guest_elf);
     let proof = client
         .prove(&pk, stdin)
         .compressed()
@@ -92,12 +106,13 @@ pub fn generate_mock_proof(
         .map_err(|e| anyhow::anyhow!(e))
         .context("Witness pre-validation failed — fix inputs before proving")?;
 
+    let guest_elf = load_evm_guest_elf()?;
     let client = ProverClient::mock();
 
     let mut stdin = SP1Stdin::new();
     stdin.write(witness);
 
-    let (pk, _vk) = client.setup(EVM_VERIFIER_ELF);
+    let (pk, _vk) = client.setup(&guest_elf);
     let proof = client
         .prove(&pk, stdin)
         .run()
@@ -126,6 +141,7 @@ pub fn verify_proof(
     proof_bytes: &[u8],
     expected_public_inputs: &EVMProofPublicInputs,
 ) -> Result<()> {
+    let guest_elf = load_evm_guest_elf()?;
     let client = ProverClient::new();
 
     let proof: sp1_sdk::SP1ProofWithPublicValues = bincode::deserialize(proof_bytes)
@@ -163,7 +179,7 @@ pub fn verify_proof(
         anyhow::bail!("Public input mismatch: chain_anchor_hash");
     }
 
-    let (_pk, vk) = client.setup(EVM_VERIFIER_ELF);
+    let (_pk, vk) = client.setup(&guest_elf);
     client
         .verify(&proof, &vk)
         .context("Proof verification failed")?;
